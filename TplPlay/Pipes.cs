@@ -1,46 +1,42 @@
 ﻿using ICSharpCode.SharpZipLib.BZip2;
-using System.Collections;
 using System.Collections.Concurrent;
-using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
 using System.Xml;
 using System.Xml.Serialization;
 
 namespace TplPlay.Pipes;
 
+
+public record PipePart;
+
+public record PipeBufferPart(Func<Int64> GetBufferSize) : PipePart;
+
+public record PipeWorkerPart(String Name) : PipePart;
+
+public interface IPipeContext
+{
+    void AddPart(PipePart part);
+}
+
+public class PipeContext : IPipeContext
+{
+    List<PipePart> parts;
+
+    public IEnumerable<PipePart> Parts => parts;
+
+    public void AddPart(PipePart part) => parts.Add(part);
+}
+
 public interface IStreamPipeEnd
 {
-    Task Suck(PipeWriter writer);
-    Task Blow(PipeReader reader);
+    Task Suck(PipeWriter writer, IPipeContext context);
+    Task Blow(PipeReader reader, IPipeContext context);
 }
 
 public interface IEnumerablePipeEnd<T>
 {
-    Task Suck(BlockingCollection<T> sink);
-    Task Blow(BlockingCollection<T> source);
-}
-
-public class ConcurrentBlackhole<T> : IProducerConsumerCollection<T>
-{
-    public Int32 Count => 0;
-
-    public Boolean IsSynchronized => true;
-    public Object SyncRoot => this;
-
-    public void CopyTo(T[] array, Int32 index) { }
-    public void CopyTo(Array array, Int32 index) { }
-
-    public T[] ToArray() => new T[0];
-
-    public Boolean TryAdd(T item) => true;
-    public Boolean TryTake([MaybeNullWhen(false)] out T item)
-    {
-        item = default;
-        return false;
-    }
-
-    public IEnumerator<T> GetEnumerator() => Enumerable.Empty<T>().GetEnumerator();
-    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    Task Suck(BlockingCollection<T> sink, IPipeContext context);
+    Task Blow(BlockingCollection<T> source, IPipeContext context);
 }
 
 public class BlackholePipeEnd<T>
@@ -73,14 +69,14 @@ public class FilePipeEnd : IStreamPipeEnd
         fileInfo = new FileInfo(fileName);
     }
 
-    public async Task Suck(PipeWriter writer)
+    public async Task Suck(PipeWriter writer, IPipeContext context)
     {
         using var stream = fileInfo.OpenRead();
 
         await stream.CopyToAsync(writer);
     }
 
-    public async Task Blow(PipeReader reader)
+    public async Task Blow(PipeReader reader, IPipeContext context)
     {
         using var stream = fileInfo.OpenWrite();
 
@@ -97,26 +93,34 @@ public class ZipPipeEnd : IStreamPipeEnd
         this.sourcePipeEnd = sourcePipeEnd;
     }
 
-    public Task Suck(PipeWriter writer)
+    public Task Suck(PipeWriter writer, IPipeContext context)
     {
         var pipe = new Pipe();
 
-        sourcePipeEnd.Suck(pipe.Writer);
+        var sourceTask = sourcePipeEnd.Suck(pipe.Writer, context);
+
+        context.AddPart(pipe.ToPart());
+
+        context.AddPart(new PipeWorkerPart("decompressing"));
 
         var stream = new BZip2InputStream(pipe.Reader.AsStream());
 
-        return stream.CopyToAsync(writer);
+        return Task.WhenAll(sourceTask, stream.CopyToAsync(writer));
     }
 
-    public Task Blow(PipeReader reader)
+    public Task Blow(PipeReader reader, IPipeContext context)
     {
         var pipe = new Pipe();
 
-        sourcePipeEnd.Blow(pipe.Reader);
+        var sourceTask = sourcePipeEnd.Blow(pipe.Reader, context);
+
+        context.AddPart(pipe.ToPart());
+
+        context.AddPart(new PipeWorkerPart("compressing"));
 
         var stream = new BZip2OutputStream(pipe.Writer.AsStream());
 
-        return reader.CopyToAsync(stream);
+        return Task.WhenAll(sourceTask, reader.CopyToAsync(stream));
     }
 }
 
@@ -131,11 +135,11 @@ public class ParserPipeEnd<T> : IEnumerablePipeEnd<T>
         this.sourcePipeEnd = sourcePipeEnd;
     }
 
-    public Task Suck(BlockingCollection<T> sink)
+    public Task Suck(BlockingCollection<T> sink, IPipeContext context)
     {
         var pipe = new Pipe();
 
-        var suckTask = sourcePipeEnd.Suck(pipe.Writer);
+        var suckTask = sourcePipeEnd.Suck(pipe.Writer, context);
 
         var task = Task.Run(() => SuckSync(pipe.Reader, sink));
 
@@ -166,7 +170,7 @@ public class ParserPipeEnd<T> : IEnumerablePipeEnd<T>
         sink.CompleteAdding();
     }
 
-    public Task Blow(BlockingCollection<T> source)
+    public Task Blow(BlockingCollection<T> source, IPipeContext context)
     {
         throw new NotImplementedException();
     }
@@ -185,18 +189,33 @@ public class TransformEnumerablePipeEnd<S, T> : IEnumerablePipeEnd<T>
         this.reverseMap = reverseMap;
     }
 
-    public Task Suck(BlockingCollection<T> sink)
+    public Task Suck(BlockingCollection<T> sink, IPipeContext context)
     {
         var buffer = new BlockingCollection<S>();
 
-        var sourceTask = sourcePipeEnd.Suck(buffer);
+        var sourceTask = sourcePipeEnd.Suck(buffer, context);
 
-        var task = Task.Run(() => SuckSync(buffer, sink));
+        context.AddPart(buffer.ToPart());
+
+        var task = Task.Run(() => Transform(buffer, sink, map));
 
         return Task.WhenAll(sourceTask, task);
     }
 
-    void SuckSync(BlockingCollection<S> buffer, BlockingCollection<T> sink)
+    public Task Blow(BlockingCollection<T> source, IPipeContext context)
+    {
+        var buffer = new BlockingCollection<S>();
+
+        var sourceTask = sourcePipeEnd.Blow(buffer, context);
+
+        context.AddPart(buffer.ToPart());
+
+        var task = Task.Run(() => Transform(source, buffer, reverseMap));
+
+        return Task.WhenAll(sourceTask, task);
+    }
+
+    void Transform<S2, T2>(BlockingCollection<S2> buffer, BlockingCollection<T2> sink, Func<S2, T2> map)
     {
         while (!buffer.IsCompleted)
         {
@@ -206,11 +225,6 @@ public class TransformEnumerablePipeEnd<S, T> : IEnumerablePipeEnd<T>
         }
 
         sink.CompleteAdding();
-    }
-
-    public Task Blow(BlockingCollection<T> source)
-    {
-        throw new NotImplementedException();
     }
 }
 
@@ -241,8 +255,11 @@ public static class Pipes
     {
         var pipe = new Pipe();
 
-        var suckingTask = source.Suck(pipe.Writer);
-        var blowingTask = sink.Blow(pipe.Reader);
+        var suckingContext = new PipeContext();
+        var blowingContext = new PipeContext();
+
+        var suckingTask = source.Suck(pipe.Writer, suckingContext);
+        var blowingTask = sink.Blow(pipe.Reader, blowingContext);
 
         await Task.WhenAll(suckingTask, blowingTask);
     }
@@ -251,8 +268,11 @@ public static class Pipes
     {
         var collection = new BlockingCollection<T>();
 
-        var suckingTask = source.Suck(collection);
-        var blowingTask = sink.Blow(collection);
+        var suckingContext = new PipeContext();
+        var blowingContext = new PipeContext();
+
+        var suckingTask = source.Suck(collection, suckingContext);
+        var blowingTask = sink.Blow(collection, blowingContext);
 
         await Task.WhenAll(suckingTask, blowingTask);
     }
@@ -273,5 +293,6 @@ public static class Pipes
     {
         while (!sink.IsCompleted) sink.Take();
     }
+
 
 }
