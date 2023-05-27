@@ -1,6 +1,9 @@
 ﻿// See https://aka.ms/new-console-template for more information
 using ICSharpCode.SharpZipLib.BZip2;
+using Spectre.Console;
 using System.IO.Pipelines;
+using System.Reactive.Linq;
+using System.Threading.Tasks;
 using System.Threading.Tasks.Dataflow;
 using System.Xml.Linq;
 using TplPlay;
@@ -42,9 +45,41 @@ var sinkFileName = @"c:\users\jens\downloads\dewiki-20230501-pages-articles-copy
 
 var input = Pipes.File(fileName)
     .Zip()
-    .ParseXml<XElement>()
-    .Do(e => Console.WriteLine($"Got {e}"));
+    ;
 
 var output = Pipes.File(sinkFileName);
 
-await input.ForeachAsync();
+var pipeline = input.BuildCopyingPipeline(output);
+
+pipeline.Run(out var livePipeline);
+
+var table = new Table();
+
+table.Border = TableBorder.None;
+
+table.AddColumn("");
+
+AnsiConsole.MarkupLine("Running pipeline");
+
+var qwer2 = AnsiConsole.Live(table)
+    .StartAsync(async ctx =>
+    {
+        while (!livePipeline.Task.IsCompleted)
+        {
+            await Task.Delay(250);
+
+            {
+                var report = livePipeline.GetReport();
+
+                table.Rows.Clear();
+                foreach (var part in report.Parts)
+                {
+                    table.AddRow(part.ToString());
+                }
+            }
+
+            ctx.Refresh();
+        }
+    });
+
+await livePipeline.Task;
