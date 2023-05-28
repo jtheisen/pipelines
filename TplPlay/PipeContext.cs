@@ -132,21 +132,48 @@ public class LivePipeline
         return new PipeReport(parts);
     }
 
-    PipeReportPart GetReportPart(PipePart part) => part switch
+    static PipeReportPart GetReportPart(PipePart part) => part switch
     {
         PipeBufferPart bufferPart => Buffers.GetReport(bufferPart.Buffer),
-        PipeWorkerPart workerPart => new PipeReportWorker(workerPart.Worker.Name),
+        PipeWorkerPart workerPart => new PipeReportWorker(workerPart.Worker.Name, GetState(workerPart.Task)),
         _ => null
     };
+
+    static PipeReportWorkerState GetState(Task task)
+    {
+        if (task is null) return PipeReportWorkerState.Ready;
+
+        if (task.IsCanceled) return PipeReportWorkerState.Cancelled;
+
+        if (task.IsCompletedSuccessfully) return PipeReportWorkerState.Completed;
+
+        if (task.IsFaulted) return PipeReportWorkerState.Failed;
+
+        return PipeReportWorkerState.Running;
+    }
 }
 
 public record PipeReportPart;
 
-public record PipeReportBinaryBufferPart(Int64 Content, Int64 Size) : PipeReportPart;
+public enum PipeReportBufferState
+{
+    Empty,
+    Mixed,
+    Full
+}
 
-public record PipeReportItemBufferPart(Int32 Count, Int32 Size) : PipeReportPart;
+public record PipeReportBufferPart(PipeReportBufferState State, Int64 Content, Int64 Size) : PipeReportPart;
 
-public record PipeReportWorker(String Name) : PipeReportPart;
+public enum PipeReportWorkerState
+{
+    Ready,
+    Running,
+    Completed,
+    Cancelled,
+    Failed
+}
+
+public record PipeReportWorker(String Name, PipeReportWorkerState State) : PipeReportPart;
 
 public record PipeReport(PipeReportPart[] Parts);
 

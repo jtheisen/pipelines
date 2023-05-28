@@ -47,7 +47,9 @@ var input = Pipes.File(fileName)
     .Zip()
     ;
 
-var output = Pipes.File(sinkFileName);
+var output = Pipes.File(sinkFileName)
+    //.Zip()
+    ;
 
 var pipeline = input.BuildCopyingPipeline(output);
 
@@ -64,6 +66,8 @@ AnsiConsole.MarkupLine("Running pipeline");
 var qwer2 = AnsiConsole.Live(table)
     .StartAsync(async ctx =>
     {
+        var reporter = new SpectreReporter();
+
         while (!livePipeline.Task.IsCompleted)
         {
             await Task.Delay(250);
@@ -74,7 +78,7 @@ var qwer2 = AnsiConsole.Live(table)
                 table.Rows.Clear();
                 foreach (var part in report.Parts)
                 {
-                    table.AddRow(part.ToString());
+                    table.AddRow(reporter.GetLineForPart(part));
                 }
             }
 
