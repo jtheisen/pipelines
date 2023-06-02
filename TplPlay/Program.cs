@@ -14,39 +14,10 @@ var output = Pipes.File(sinkFileName)
     //.Zip()
     ;
 
-var pipeline = input.BuildCopyingPipeline(output);
-
-pipeline.Run(out var livePipeline);
-
-var table = new Table();
-
-table.Border = TableBorder.None;
-
-table.AddColumn("");
-
 AnsiConsole.MarkupLine("Running pipeline");
 
-var qwer2 = AnsiConsole.Live(table)
-    .StartAsync(async ctx =>
-    {
-        var reporter = new SpectreReporter();
+var pipeline = input.BuildCopyingPipeline(output);
 
-        while (!livePipeline.Task.IsCompleted)
-        {
-            await Task.Delay(250);
-
-            {
-                var report = livePipeline.GetReport();
-
-                table.Rows.Clear();
-                foreach (var part in report.Parts)
-                {
-                    table.AddRow(reporter.GetLineForPart(part));
-                }
-            }
-
-            ctx.Refresh();
-        }
-    });
-
-await livePipeline.Task;
+pipeline.Start()
+    .ReportSpectre()
+    .Wait();
