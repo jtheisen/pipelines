@@ -1,11 +1,10 @@
 ﻿using ICSharpCode.SharpZipLib.BZip2;
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
-using System.Reflection.PortableExecutable;
 using System.Xml;
 using System.Xml.Serialization;
 
-namespace TplPlay.Pipes;
+namespace Pipelines;
 
 public interface IPipeEnd<B>
 {
@@ -79,7 +78,7 @@ public class ZipPipeEnd : IStreamPipeEnd, IWorker
 
     public void Run(Pipe nextPipe, IPipeContext context)
     {
-        var pipe = new Pipe();
+        var pipe = Buffers.MakeBuffer<Pipe>();
 
         nestedPipeEnd.Run(pipe, context);
 
@@ -126,7 +125,7 @@ public class ParserPipeEnd<T> : IEnumerablePipeEnd<T>, IWorker
 
     public void Run(BlockingCollection<T> buffer, IPipeContext context)
     {
-        var pipe = new Pipe();
+        var pipe = Buffers.MakeBuffer<Pipe>();
 
         sourcePipeEnd.Run(pipe, context);
 
@@ -173,6 +172,214 @@ public class ParserPipeEnd<T> : IEnumerablePipeEnd<T>, IWorker
     }
 }
 
+public class QueryablePipeEnd<T> : IEnumerablePipeEnd<T>, IWorker
+{
+    private readonly IQueryable<T> source;
+
+    public QueryablePipeEnd(IQueryable<T> source)
+    {
+        this.source = source;
+    }
+
+    public String Name => "queryable";
+
+    public void Run(BlockingCollection<T> nextBuffer, IPipeContext context)
+    {
+        context.AddWorker(this);
+
+        switch (context.Mode)
+        {
+            case PipeRunMode.Suck:
+                context.Schedule("ingesting", progress =>
+                {
+                    var length = source.LongCount();
+
+                    progress.ReportTotal(length);
+
+                    var processed = 0L;
+
+                    foreach (var item in source)
+                    {
+                        nextBuffer.Add(item);
+
+                        progress.ReportProcessed(++processed);
+                    }
+
+                    nextBuffer.CompleteAdding();
+                });
+                break;
+            case PipeRunMode.Blow:
+                throw new NotImplementedException($"Blowing into a {nameof(QueryablePipeEnd<T>)} is not supported");
+            default:
+                break;
+        }
+    }
+}
+
+public class ActionPipeEnd<T> : IEnumerablePipeEnd<T>, IWorker
+{
+    private readonly Action<T> action;
+
+    public ActionPipeEnd(Action<T> action)
+    {
+        this.action = action;
+    }
+
+    public String Name => "action";
+
+    public void Run(BlockingCollection<T> nextBuffer, IPipeContext context)
+    {
+        context.AddWorker(this);
+
+        switch (context.Mode)
+        {
+            case PipeRunMode.Suck:
+                throw new NotImplementedException($"Sucking from a {nameof(ActionPipeEnd<T>)} is not supported");
+            case PipeRunMode.Blow:
+                context.Schedule("calling", () =>
+                {
+                    foreach (var item in nextBuffer.GetConsumingEnumerable())
+                    {
+                        action(item);
+                    }
+                });
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+public class AsyncActionPipeEnd<T> : IEnumerablePipeEnd<T>, IWorker
+{
+    private readonly Func<T, Task> action;
+
+    public AsyncActionPipeEnd(Func<T, Task> action)
+    {
+        this.action = action;
+    }
+
+    public String Name => "action";
+
+    public void Run(BlockingCollection<T> nextBuffer, IPipeContext context)
+    {
+        context.AddWorker(this);
+
+        switch (context.Mode)
+        {
+            case PipeRunMode.Suck:
+                throw new NotImplementedException($"Sucking from a {nameof(ActionPipeEnd<T>)} is not supported");
+            case PipeRunMode.Blow:
+                context.Schedule("calling", async () =>
+                {
+                    foreach (var item in nextBuffer.GetConsumingEnumerable())
+                    {
+                        await action(item);
+                    }
+                });
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+public class EnumerableTransformEnumerablePipeEnd<S, T> : IEnumerablePipeEnd<T>, IWorker
+{
+    private readonly IEnumerablePipeEnd<S> nestedPipeEnd;
+    private readonly Func<IEnumerable<S>, IEnumerable<T>> map;
+
+    public EnumerableTransformEnumerablePipeEnd(IEnumerablePipeEnd<S> nestedPipeEnd, Func<IEnumerable<S>, IEnumerable<T>> map)
+    {
+        this.nestedPipeEnd = nestedPipeEnd;
+        this.map = map;
+    }
+
+    public String Name => "transform";
+
+    public void Run(BlockingCollection<T> nextBuffer, IPipeContext context)
+    {
+        var buffer = Buffers.MakeBuffer<BlockingCollection<S>>();
+
+        nestedPipeEnd.Run(buffer, context);
+
+        context.AddBuffer(buffer);
+
+        context.AddWorker(this);
+
+        switch (context.Mode)
+        {
+            case PipeRunMode.Suck:
+                context.Schedule("transforming", () => Transform(buffer, nextBuffer));
+                break;
+            case PipeRunMode.Blow:
+                throw new Exception($"This worker does not support blowing");
+            default:
+                break;
+        }
+    }
+
+    void Transform(BlockingCollection<S> buffer, BlockingCollection<T> sink)
+    {
+        var items = map(buffer.GetConsumingEnumerable());
+
+        foreach (var item in items)
+        {
+            sink.Add(item);
+        }
+
+        sink.CompleteAdding();
+    }
+}
+
+public class AsyncEnumerableTransformEnumerablePipeEnd<S, T> : IEnumerablePipeEnd<T>, IWorker
+{
+    private readonly IEnumerablePipeEnd<S> nestedPipeEnd;
+    private readonly Func<IEnumerable<S>, IAsyncEnumerable<T>> map;
+
+    public AsyncEnumerableTransformEnumerablePipeEnd(IEnumerablePipeEnd<S> nestedPipeEnd, Func<IEnumerable<S>, IAsyncEnumerable<T>> map)
+    {
+        this.nestedPipeEnd = nestedPipeEnd;
+        this.map = map;
+    }
+
+    public String Name => "transform";
+
+    public void Run(BlockingCollection<T> nextBuffer, IPipeContext context)
+    {
+        var buffer = Buffers.MakeBuffer<BlockingCollection<S>>();
+
+        nestedPipeEnd.Run(buffer, context);
+
+        context.AddBuffer(buffer);
+
+        context.AddWorker(this);
+
+        switch (context.Mode)
+        {
+            case PipeRunMode.Suck:
+                context.ScheduleAsync("transforming", () => Transform(buffer, nextBuffer));
+                break;
+            case PipeRunMode.Blow:
+                throw new Exception($"This worker does not support blowing");
+            default:
+                break;
+        }
+    }
+
+    async Task Transform(BlockingCollection<S> buffer, BlockingCollection<T> sink)
+    {
+        var items = map(buffer.GetConsumingEnumerable());
+
+        await foreach (var item in items)
+        {
+            sink.Add(item);
+        }
+
+        sink.CompleteAdding();
+    }
+}
+
 public class TransformEnumerablePipeEnd<S, T> : IEnumerablePipeEnd<T>, IWorker
 {
     private readonly IEnumerablePipeEnd<S> nestedPipeEnd;
@@ -190,7 +397,7 @@ public class TransformEnumerablePipeEnd<S, T> : IEnumerablePipeEnd<T>, IWorker
 
     public void Run(BlockingCollection<T> nextBuffer, IPipeContext context)
     {
-        var buffer = new BlockingCollection<S>();
+        var buffer = Buffers.MakeBuffer<BlockingCollection<S>>();
 
         nestedPipeEnd.Run(buffer, context);
 
@@ -241,7 +448,7 @@ public class AsyncTransformEnumerablePipeEnd<S, T> : IEnumerablePipeEnd<T>, IWor
 
     public void Run(BlockingCollection<T> nextBuffer, IPipeContext context)
     {
-        var buffer = new BlockingCollection<S>();
+        var buffer = Buffers.MakeBuffer<BlockingCollection<S>>();
 
         nestedPipeEnd.Run(buffer, context);
 
@@ -252,10 +459,10 @@ public class AsyncTransformEnumerablePipeEnd<S, T> : IEnumerablePipeEnd<T>, IWor
         switch (context.Mode)
         {
             case PipeRunMode.Suck:
-                context.Schedule("transforming", () => Transform(buffer, nextBuffer, map));
+                context.ScheduleAsync("transforming", () => Transform(buffer, nextBuffer, map));
                 break;
             case PipeRunMode.Blow:
-                context.Schedule("transforming", () => Transform(nextBuffer, buffer, reverseMap));
+                context.ScheduleAsync("transforming", () => Transform(nextBuffer, buffer, reverseMap));
                 break;
             default:
                 break;
@@ -283,12 +490,24 @@ public static class Pipes
 
     public static IStreamPipeEnd Zip(this IStreamPipeEnd source) => new ZipPipeEnd(source);
 
+    public static IEnumerablePipeEnd<T> FromQueryable<T>(this IQueryable<T> source)
+        => new QueryablePipeEnd<T>(source);
+
+    public static IEnumerablePipeEnd<T> FromAction<T>(Action<T> source)
+        => new ActionPipeEnd<T>(source);
+
+    public static IEnumerablePipeEnd<T> FromAsyncAction<T>(Func<T, Task> source)
+        => new AsyncActionPipeEnd<T>(source);
+
     public static IEnumerablePipeEnd<T> ParseXml<T>(this IStreamPipeEnd source) => new ParserPipeEnd<T>(source);
 
-    public static IEnumerablePipeEnd<T> Transform<S, T>(this IEnumerablePipeEnd<S> source, Func<S, T> map, Func<T, S> reverseMap = null)
+    public static IEnumerablePipeEnd<T> Transform<S, T>(this IEnumerablePipeEnd<S> source, Func<IEnumerable<S>, IEnumerable<T>> map)
+        => new EnumerableTransformEnumerablePipeEnd<S, T>(source, map);
+
+    public static IEnumerablePipeEnd<T> Map<S, T>(this IEnumerablePipeEnd<S> source, Func<S, T> map, Func<T, S> reverseMap = null)
         => new TransformEnumerablePipeEnd<S, T>(source, map, reverseMap);
 
-    public static IEnumerablePipeEnd<T> Transform<S, T>(this IEnumerablePipeEnd<S> source, Func<S, Task<T>> map, Func<T, Task<S>> reverseMap = null)
+    public static IEnumerablePipeEnd<T> Map<S, T>(this IEnumerablePipeEnd<S> source, Func<S, Task<T>> map, Func<T, Task<S>> reverseMap = null)
         => new AsyncTransformEnumerablePipeEnd<S, T>(source, map, reverseMap);
 
     public static IEnumerablePipeEnd<T> Do<T>(this IEnumerablePipeEnd<T> source, Action<T> action)
@@ -309,23 +528,14 @@ public static class Pipes
         return new Pipeline<B>(source, sink);
     }
 
-    //public static async Task ForeachAsync<T>(this IEnumerablePipeEnd<T> source, Action<T> action = null)
-    //{
-    //    if (action is not null)
-    //    {
-    //        source = source.Do(action);
-    //    }
+    public static LivePipeline Start(this IPipeline pipeline)
+    {
+        pipeline.Run(out var livePipeline);
+        
+        return livePipeline;
+    }
 
-    //    var context = new PipeContext(PipeRunMode.Suck);
+    public static void Wait(this LivePipeline pipeline) => pipeline.Task.Wait();
 
-    //    var concurrentBlackhole = new ConcurrentBlackhole<T>();
-
-    //    var blockingBlackhole = new BlockingCollection<T>(concurrentBlackhole);
-
-    //    source.Run(blockingBlackhole, context);
-
-
-
-    //    await Task.WhenAll(context.Tasks);
-    //}
+    public static Task WaitAsync(this LivePipeline pipeline) => pipeline.Task;
 }

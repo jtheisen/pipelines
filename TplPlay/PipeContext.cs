@@ -1,6 +1,4 @@
-﻿using System.Collections.Concurrent;
-
-namespace TplPlay.Pipes;
+﻿namespace Pipelines;
 
 public class PipePart { }
 
@@ -13,6 +11,7 @@ public class PipeWorkerPart : PipePart
 {
     public IWorker Worker { get; init; }
     public String Verb { get; set; }
+    public WorkerInputProgress Progress { get; set; }
     public Task Task { get; set; }
 }
 
@@ -21,6 +20,24 @@ public enum PipeRunMode
     Probe,
     Suck,
     Blow
+}
+
+public interface IWorkerInputProgress
+{
+    void ReportTotal(Int64 total);
+    void ReportProcessed(Int64 processed);
+}
+
+public class WorkerInputProgress : IWorkerInputProgress
+{
+    Int64 total;
+    Int64 processed;
+
+    public void ReportTotal(Int64 total) => this.total = total;
+    public void ReportProcessed(Int64 processed) => this.processed = processed;
+
+    public Int64 Total => this.total;
+    public Int64 Processed => this.processed;
 }
 
 public interface IPipeContext
@@ -33,9 +50,13 @@ public interface IPipeContext
 
     void SetTask(String verb, Task task);
 
+    void Schedule(String verb, Action<IWorkerInputProgress> task);
+
     void Schedule(String verb, Action task);
 
     void ScheduleAsync(String verb, Func<Task> task);
+
+    void ScheduleAsync(String verb, Func<IWorkerInputProgress, Task> task);
 }
 
 public class PipeContext : IPipeContext
@@ -59,17 +80,29 @@ public class PipeContext : IPipeContext
 
     public void SetTask(String verb, Task task)
     {
+        SetTask(verb, _ => task);
+    }
+
+    void SetTask(String verb, Func<IWorkerInputProgress, Task> getTask)
+    {
         var lastPart = parts.LastOrDefault() as PipeWorkerPart;
 
         if (lastPart is null) throw new Exception($"Can't set task without a worker part");
 
-        lastPart.Task = task;
+        var progress = new WorkerInputProgress();
+
+        lastPart.Task = getTask(progress);
         lastPart.Verb = verb;
+        lastPart.Progress = progress;
     }
 
-    public void Schedule(String verb, Action task) => SetTask(verb, Task.Run(task));
 
-    public void ScheduleAsync(String verb, Func<Task> task) => SetTask(verb, task());
+
+    public void Schedule(String verb, Action task) => SetTask(verb, _ => Task.Run(task));
+    public void Schedule(String verb, Action<IWorkerInputProgress> task) => SetTask(verb, p => Task.Run(() => task(p)));
+
+    public void ScheduleAsync(String verb, Func<Task> task) => SetTask(verb, _ => task());
+    public void ScheduleAsync(String verb, Func<IWorkerInputProgress, Task> task) => SetTask(verb, task);
 }
 
 public interface IPipeline
@@ -138,8 +171,8 @@ public class LivePipeline
 
     static PipeReportPart GetReportPart(PipePart part) => part switch
     {
-        PipeBufferPart bufferPart => Buffers.GetReport(bufferPart.Buffer),
-        PipeWorkerPart workerPart => new PipeReportWorker(workerPart.Worker.Name, GetState(workerPart.Task)),
+        PipeBufferPart bufferPart => Buffers.GetAppropriateReport(bufferPart.Buffer),
+        PipeWorkerPart workerPart => new PipeReportWorker(workerPart.Worker.Name, workerPart.Progress, GetState(workerPart.Task)),
         _ => null
     };
 
@@ -177,7 +210,7 @@ public enum PipeReportWorkerState
     Failed
 }
 
-public record PipeReportWorker(String Name, PipeReportWorkerState State) : PipeReportPart;
+public record PipeReportWorker(String Name, WorkerInputProgress Progress, PipeReportWorkerState State) : PipeReportPart;
 
 public record PipeReport(PipeReportPart[] Parts);
 
