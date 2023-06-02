@@ -34,6 +34,8 @@ public interface IPipeContext
     void SetTask(String verb, Task task);
 
     void Schedule(String verb, Action task);
+
+    void ScheduleAsync(String verb, Func<Task> task);
 }
 
 public class PipeContext : IPipeContext
@@ -66,6 +68,8 @@ public class PipeContext : IPipeContext
     }
 
     public void Schedule(String verb, Action task) => SetTask(verb, Task.Run(task));
+
+    public void ScheduleAsync(String verb, Func<Task> task) => SetTask(verb, task());
 }
 
 public interface IPipeline

@@ -224,6 +224,59 @@ public class TransformEnumerablePipeEnd<S, T> : IEnumerablePipeEnd<T>, IWorker
     }
 }
 
+public class AsyncTransformEnumerablePipeEnd<S, T> : IEnumerablePipeEnd<T>, IWorker
+{
+    private readonly IEnumerablePipeEnd<S> nestedPipeEnd;
+    private readonly Func<S, Task<T>> map;
+    private readonly Func<T, Task<S>> reverseMap;
+
+    public AsyncTransformEnumerablePipeEnd(IEnumerablePipeEnd<S> nestedPipeEnd, Func<S, Task<T>> map, Func<T, Task<S>> reverseMap = null)
+    {
+        this.nestedPipeEnd = nestedPipeEnd;
+        this.map = map;
+        this.reverseMap = reverseMap;
+    }
+
+    public String Name => "transform";
+
+    public void Run(BlockingCollection<T> nextBuffer, IPipeContext context)
+    {
+        var buffer = new BlockingCollection<S>();
+
+        nestedPipeEnd.Run(buffer, context);
+
+        context.AddBuffer(buffer);
+
+        context.AddWorker(this);
+
+        switch (context.Mode)
+        {
+            case PipeRunMode.Suck:
+                context.Schedule("transforming", () => Transform(buffer, nextBuffer, map));
+                break;
+            case PipeRunMode.Blow:
+                context.Schedule("transforming", () => Transform(nextBuffer, buffer, reverseMap));
+                break;
+            default:
+                break;
+        }
+    }
+
+    async Task Transform<S2, T2>(BlockingCollection<S2> buffer, BlockingCollection<T2> sink, Func<S2, Task<T2>> map)
+    {
+        while (!buffer.IsCompleted)
+        {
+            var item = buffer.Take();
+
+            var transformed = await map(item);
+
+            sink.Add(transformed);
+        }
+
+        sink.CompleteAdding();
+    }
+}
+
 public static class Pipes
 {
     public static IStreamPipeEnd File(String fileName) => new FilePipeEnd(fileName);
@@ -234,6 +287,9 @@ public static class Pipes
 
     public static IEnumerablePipeEnd<T> Transform<S, T>(this IEnumerablePipeEnd<S> source, Func<S, T> map, Func<T, S> reverseMap = null)
         => new TransformEnumerablePipeEnd<S, T>(source, map, reverseMap);
+
+    public static IEnumerablePipeEnd<T> Transform<S, T>(this IEnumerablePipeEnd<S> source, Func<S, Task<T>> map, Func<T, Task<S>> reverseMap = null)
+        => new AsyncTransformEnumerablePipeEnd<S, T>(source, map, reverseMap);
 
     public static IEnumerablePipeEnd<T> Do<T>(this IEnumerablePipeEnd<T> source, Action<T> action)
     {
