@@ -1,1 +1,2 @@
-﻿
+﻿- When one worker fails, the others are not cancelled
+- Support cancellation

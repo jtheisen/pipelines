@@ -1,6 +1,7 @@
 ﻿using ICSharpCode.SharpZipLib.BZip2;
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
+using System.Text;
 using System.Xml;
 using System.Xml.Serialization;
 
@@ -19,6 +20,30 @@ public interface IWorker
 public interface IStreamPipeEnd : IPipeEnd<Pipe> { }
 
 public interface IEnumerablePipeEnd<T> : IPipeEnd<BlockingCollection<T>> { }
+
+public delegate void PipeEnd<B>(B pipe, IPipeContext context);
+
+public class DelegateEnumerablePipeEnd<T> : IEnumerablePipeEnd<T>
+{
+    private readonly PipeEnd<BlockingCollection<T>> implementation;
+
+    public DelegateEnumerablePipeEnd(PipeEnd<BlockingCollection<T>> implementation)
+        => this.implementation = implementation;
+
+    public void Run(BlockingCollection<T> nextBuffer, IPipeContext context)
+        => implementation(nextBuffer, context);
+}
+
+public class DelegateStreamPipeEnd : IStreamPipeEnd
+{
+    private readonly PipeEnd<Pipe> implementation;
+
+    public DelegateStreamPipeEnd(PipeEnd<Pipe> implementation)
+        => this.implementation = implementation;
+
+    public void Run(Pipe nextBuffer, IPipeContext context)
+        => implementation(nextBuffer, context);
+}
 
 public class FilePipeEnd : IStreamPipeEnd, IWorker
 {
@@ -55,6 +80,8 @@ public class FilePipeEnd : IStreamPipeEnd, IWorker
         using var stream = fileInfo.OpenRead();
 
         await stream.CopyToAsync(pipe.Writer);
+
+        pipe.Writer.Complete();
     }
 
     async Task Blow(Pipe pipe)
@@ -484,8 +511,14 @@ public class AsyncTransformEnumerablePipeEnd<S, T> : IEnumerablePipeEnd<T>, IWor
     }
 }
 
-public static class Pipes
+public static class PipeEnds
 {
+    public static IEnumerablePipeEnd<T> Enumerable<T>(PipeEnd<BlockingCollection<T>> implementation)
+        => new DelegateEnumerablePipeEnd<T>(implementation);
+
+    public static IStreamPipeEnd Stream<T>(PipeEnd<Pipe> implementation)
+        => new DelegateStreamPipeEnd(implementation);
+
     public static IStreamPipeEnd File(String fileName) => new FilePipeEnd(fileName);
 
     public static IStreamPipeEnd Zip(this IStreamPipeEnd source) => new ZipPipeEnd(source);
@@ -527,6 +560,42 @@ public static class Pipes
     {
         return new Pipeline<B>(source, sink);
     }
+
+    public static LivePipeline StartCopyingPipeline<B>(this IPipeEnd<B> source, IPipeEnd<B> sink)
+        where B : class, new()
+    {
+        var pipeline = source.BuildCopyingPipeline(sink);
+
+        return pipeline.Start();
+    }
+
+    public static Task CopyToAsync<B>(this IPipeEnd<B> source, IPipeEnd<B> sink)
+        where B : class, new()
+    {
+        var livePipeline = source.StartCopyingPipeline(sink);
+
+        return livePipeline.Task;
+    }
+
+    public static void CopyTo<B>(this IPipeEnd<B> source, IPipeEnd<B> sink)
+        where B : class, new()
+    {
+        source.CopyToAsync(sink).Wait();
+    }
+
+    public static async Task<T[]> ReadAllAsync<T>(this IEnumerablePipeEnd<T> source)
+    {
+        var list = new List<T>();
+
+        var target = FromAction<T>(list.Add);
+
+        await source.CopyToAsync(target);
+
+        return list.ToArray();
+    }
+
+    public static T[] ReadAll<T>(this IEnumerablePipeEnd<T> source)
+        => source.ReadAllAsync().Result;
 
     public static LivePipeline Start(this IPipeline pipeline)
     {
