@@ -123,4 +123,32 @@ public static class Buffers
         if (count > upper) return PipeReportBufferState.Full;
         return PipeReportBufferState.Mixed;
     }
+
+    internal static void TransformTo<S, T>(this BlockingCollection<S> buffer, BlockingCollection<T> sink, Func<S, T> map, CancellationToken ct = default)
+    {
+        while (!buffer.IsCompleted)
+        {
+            var item = buffer.Take(ct);
+
+            sink.Add(map(item), ct);
+        }
+
+        sink.CompleteAdding();
+    }
+
+    internal static async Task TransformToAsync<S, T>(this BlockingCollection<S> buffer, BlockingCollection<T> sink, Func<S, CancellationToken, Task<T>> map, CancellationToken ct = default)
+    {
+        while (!buffer.IsCompleted)
+        {
+            var item = buffer.Take(ct);
+
+            var transformed = await map(item, ct);
+
+            sink.Add(transformed, ct);
+        }
+
+        sink.CompleteAdding();
+    }
+
+
 }

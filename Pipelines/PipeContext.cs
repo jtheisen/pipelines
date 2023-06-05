@@ -9,7 +9,7 @@ public class PipeBufferPart : PipePart
 
 public class PipeWorkerPart : PipePart
 {
-    public IWorker Worker { get; init; }
+    public String Name { get; init; }
     public String Verb { get; set; }
     public WorkerInputProgress Progress { get; set; }
     public Task Task { get; set; }
@@ -46,42 +46,37 @@ public interface IPipeContext
 
     void AddBuffer(Object buffer);
 
-    void AddWorker<W>(W worker) where W : IWorker;
-
-    void SetTask(String verb, Task task);
+    void AddWorker(String name);
 
     void Schedule(String verb, Action<IWorkerInputProgress> task);
 
     void Schedule(String verb, Action task);
 
-    void ScheduleAsync(String verb, Func<Task> task);
+    void ScheduleAsync(String verb, Func<CancellationToken, Task> task);
 
-    void ScheduleAsync(String verb, Func<IWorkerInputProgress, Task> task);
+    void ScheduleAsync(String verb, Func<CancellationToken, IWorkerInputProgress, Task> task);
 }
 
 public class PipeContext : IPipeContext
 {
     PipeRunMode mode;
     List<PipePart> parts;
+    CancellationToken ct;
 
     public PipeRunMode Mode => mode;
 
-    public PipeContext(PipeRunMode mode)
+    public PipeContext(PipeRunMode mode, CancellationToken ct)
     {
         this.mode = mode;
         this.parts = new List<PipePart>();
+        this.ct = ct;
     }
 
     public IEnumerable<PipePart> Parts => parts;
 
     public void AddBuffer(Object buffer) => parts.Add(new PipeBufferPart { Buffer = buffer });
 
-    public void AddWorker<W>(W worker) where W : IWorker => parts.Add(new PipeWorkerPart { Worker = worker });
-
-    public void SetTask(String verb, Task task)
-    {
-        SetTask(verb, _ => task);
-    }
+    public void AddWorker(String name) => parts.Add(new PipeWorkerPart { Name = name });
 
     void SetTask(String verb, Func<IWorkerInputProgress, Task> getTask)
     {
@@ -96,13 +91,11 @@ public class PipeContext : IPipeContext
         lastPart.Progress = progress;
     }
 
+    public void Schedule(String verb, Action task) => SetTask(verb, _ => Task.Run(task, ct));
+    public void Schedule(String verb, Action<IWorkerInputProgress> task) => SetTask(verb, p => Task.Run(() => task(p), ct));
 
-
-    public void Schedule(String verb, Action task) => SetTask(verb, _ => Task.Run(task));
-    public void Schedule(String verb, Action<IWorkerInputProgress> task) => SetTask(verb, p => Task.Run(() => task(p)));
-
-    public void ScheduleAsync(String verb, Func<Task> task) => SetTask(verb, _ => task());
-    public void ScheduleAsync(String verb, Func<IWorkerInputProgress, Task> task) => SetTask(verb, task);
+    public void ScheduleAsync(String verb, Func<CancellationToken, Task> task) => SetTask(verb, _ => task(ct));
+    public void ScheduleAsync(String verb, Func<CancellationToken, IWorkerInputProgress, Task> task) => SetTask(verb, p => task(ct, p));
 }
 
 public interface IPipeline
@@ -129,10 +122,12 @@ public class Pipeline<B> : IPipeline
 
     LivePipeline Instantiate()
     {
+        var cts = new CancellationTokenSource();
+
         var buffer = new B();
 
-        var suckingContext = new PipeContext(PipeRunMode.Suck);
-        var blowingContext = new PipeContext(PipeRunMode.Blow);
+        var suckingContext = new PipeContext(PipeRunMode.Suck, cts.Token);
+        var blowingContext = new PipeContext(PipeRunMode.Blow, cts.Token);
 
         source.Run(buffer, suckingContext);
         sink.Run(buffer, blowingContext);
@@ -141,26 +136,37 @@ public class Pipeline<B> : IPipeline
             .Concat(new[] { new PipeBufferPart { Buffer = buffer } })
             .Concat(blowingContext.Parts.Reverse());
 
-        return new LivePipeline(parts);
+        return new LivePipeline(parts, cts);
     }
 }
 
 public class LivePipeline
 {
+    private readonly CancellationTokenSource cts;
     private PipePart[] parts;
 
     Task task;
 
     public Task Task => task;
 
-    public LivePipeline(IEnumerable<PipePart> parts)
+    public LivePipeline(IEnumerable<PipePart> parts, CancellationTokenSource cts)
     {
         this.parts = parts.ToArray();
+        this.cts = cts;
 
-        var tasks = from p in parts.OfType<PipeWorkerPart>() let t = p.Task where t is not null select t;
+        var tasks = (
+            from p in parts.OfType<PipeWorkerPart>()
+            let t = p.Task
+            where t is not null
+            select t
+        ).ToList();
+
+        tasks.ForEach(t => t.ContinueWith(HandleFaultedTask, TaskContinuationOptions.OnlyOnFaulted));
 
         task = Task.WhenAll(tasks);
     }
+
+    void HandleFaultedTask(Task _) => Cancel();
 
     public PipeReport GetReport()
     {
@@ -169,10 +175,15 @@ public class LivePipeline
         return new PipeReport(parts);
     }
 
+    public void Cancel()
+    {
+        cts.Cancel();
+    }
+
     static PipeReportPart GetReportPart(PipePart part) => part switch
     {
         PipeBufferPart bufferPart => Buffers.GetAppropriateReport(bufferPart.Buffer),
-        PipeWorkerPart workerPart => new PipeReportWorker(workerPart.Worker.Name, workerPart.Progress, GetState(workerPart.Task)),
+        PipeWorkerPart workerPart => new PipeReportWorker(workerPart.Name, workerPart.Progress, GetState(workerPart.Task)),
         _ => null
     };
 
