@@ -73,8 +73,11 @@ public record CustomXmlSerializationSettings(
 
 public static partial class XmlExtensions
 {
-    public static IEnumerablePipeEnd<T> Xml<T>(this IStreamPipeEnd source, IXmlSerializationSettings settings = null)
-        => source.Itemize<T, IXmlSerializationSettings>("csv", settings ?? new DefaultXmlSerializationSettings(typeof(T), "items"), ParseXml, SerializeXml);
+    public static IEnumerablePipeEnd<T> Xml<T>(this IStreamPipeEnd source, XName rootName = null)
+        => source.Xml<T>(new DefaultXmlSerializationSettings(typeof(T), rootName ?? "items"));
+
+    public static IEnumerablePipeEnd<T> Xml<T>(this IStreamPipeEnd source, IXmlSerializationSettings settings)
+        => source.Itemize<T, IXmlSerializationSettings>(nameof(Xml), settings, ParseXml, SerializeXml);
 
     static void ParseXml<T>(TextReader textReader, Action<T> sink, IXmlSerializationSettings settings)
     {

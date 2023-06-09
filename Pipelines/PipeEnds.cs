@@ -1,11 +1,4 @@
-﻿using ICSharpCode.SharpZipLib.BZip2;
-using System.Collections.Concurrent;
-using System.IO.Pipelines;
-using System.Text;
-using System.Xml;
-using System.Xml.Serialization;
-
-namespace Pipelines;
+﻿namespace Pipelines;
 
 public interface IPipeEnd<B>
 {
@@ -18,6 +11,14 @@ public interface IEnumerablePipeEnd<T> : IPipeEnd<BlockingCollection<T>> { }
 
 public delegate void PipeEnd<B>(B pipe, IPipeContext context);
 
+public delegate void TerminalPipeEndWorker<B>(B sourceOrSink, IPipeContext context);
+
+public delegate void PipeWorker<SB, TB>(SB source, TB sink, IPipeContext context);
+
+public delegate void StreamWorker(Stream source, Stream sink, IPipeContext context);
+
+public delegate Stream StreamTransformation(Stream nested);
+
 public class DelegateEnumerablePipeEnd<T> : IEnumerablePipeEnd<T>
 {
     private readonly PipeEnd<BlockingCollection<T>> implementation;
@@ -27,6 +28,46 @@ public class DelegateEnumerablePipeEnd<T> : IEnumerablePipeEnd<T>
 
     public void Run(BlockingCollection<T> nextBuffer, IPipeContext context)
         => implementation(nextBuffer, context);
+}
+
+public class DelegateNestedEnumerablePipeEnd<OB, T> : IEnumerablePipeEnd<T>
+    where OB : class, new()
+{
+    private readonly IPipeEnd<OB> sourcePipeEnd;
+    private readonly String name;
+    private readonly PipeWorker<OB, BlockingCollection<T>> forward;
+    private readonly PipeWorker<BlockingCollection<T>, OB> backward;
+
+    public DelegateNestedEnumerablePipeEnd(IPipeEnd<OB> sourcePipeEnd, String name, PipeWorker<OB, BlockingCollection<T>> forward, PipeWorker<BlockingCollection<T>, OB> backward)
+    {
+        this.sourcePipeEnd = sourcePipeEnd;
+        this.name = name;
+        this.forward = forward;
+        this.backward = backward;
+    }
+
+    public void Run(BlockingCollection<T> nextBuffer, IPipeContext context)
+    {
+        var buffer = Buffers.MakeBuffer<OB>();
+
+        sourcePipeEnd.Run(buffer, context);
+
+        context.AddBuffer(buffer);
+
+        context.AddWorker(name);
+
+        switch (context.Mode)
+        {
+            case PipeRunMode.Suck:
+                if (forward is null) throw GetSuckingNotSupported(name);
+                forward(buffer, nextBuffer, context);
+                break;
+            case PipeRunMode.Blow:
+                if (backward is null) throw GetBlowingNotSupported(name);
+                backward(nextBuffer, buffer, context);
+                break;
+        }
+    }
 }
 
 public class DelegateStreamPipeEnd : IStreamPipeEnd
@@ -40,208 +81,41 @@ public class DelegateStreamPipeEnd : IStreamPipeEnd
         => implementation(nextBuffer, context);
 }
 
-public class ZipPipeEnd : IStreamPipeEnd
+public class DelegateNestedStreamPipeEnd<SB> : IStreamPipeEnd
+    where SB : class, new()
 {
-    private readonly IStreamPipeEnd nestedPipeEnd;
+    private readonly IPipeEnd<SB> sourcePipeEnd;
+    private readonly String name;
+    private readonly PipeWorker<SB, Pipe> forward;
+    private readonly PipeWorker<Pipe, SB> backward;
 
-    public ZipPipeEnd(IStreamPipeEnd sourcePipeEnd)
-    {
-        this.nestedPipeEnd = sourcePipeEnd;
-    }
-
-    public void Run(Pipe nextPipe, IPipeContext context)
-    {
-        var pipe = Buffers.MakeBuffer<Pipe>();
-
-        nestedPipeEnd.Run(pipe, context);
-
-        context.AddBuffer(pipe);
-
-        context.AddWorker("zip");
-
-        switch (context.Mode)
-        {
-            case PipeRunMode.Probe:
-                break;
-            case PipeRunMode.Suck:
-                {
-                    var stream = new BZip2InputStream(pipe.Reader.AsStream());
-
-                    context.ScheduleAsync("decrompressing", ct => stream.CopyToAsync(nextPipe.Writer, ct));
-                }
-                break;
-            case PipeRunMode.Blow:
-                {
-                    var stream = new BZip2OutputStream(pipe.Writer.AsStream());
-
-                    context.ScheduleAsync("compressing", ct => nextPipe.Reader.CopyToAsync(stream, ct));
-                }
-                break;
-            default:
-                break;
-        }
-    }
-}
-
-public class ParserPipeEnd<T> : IEnumerablePipeEnd<T>
-{
-    private readonly IStreamPipeEnd sourcePipeEnd;
-
-    XmlSerializer serializer = new XmlSerializer(typeof(T));
-
-    public ParserPipeEnd(IStreamPipeEnd sourcePipeEnd)
+    public DelegateNestedStreamPipeEnd(IPipeEnd<SB> sourcePipeEnd, String name, PipeWorker<SB, Pipe> forward, PipeWorker<Pipe, SB> backward)
     {
         this.sourcePipeEnd = sourcePipeEnd;
+        this.name = name;
+        this.forward = forward;
+        this.backward = backward;
     }
 
-    public void Run(BlockingCollection<T> buffer, IPipeContext context)
+    public void Run(Pipe nextBuffer, IPipeContext context)
     {
-        var pipe = Buffers.MakeBuffer<Pipe>();
+        var buffer = Buffers.MakeBuffer<SB>();
 
-        sourcePipeEnd.Run(pipe, context);
+        sourcePipeEnd.Run(buffer, context);
 
-        context.AddBuffer(pipe);
+        context.AddBuffer(buffer);
 
-        context.AddWorker("xml");
+        context.AddWorker(name);
 
         switch (context.Mode)
         {
             case PipeRunMode.Suck:
-                context.Schedule("parsing", () => Parse(pipe.Reader, buffer));
-
+                if (forward is null) throw GetSuckingNotSupported(name);
+                forward(buffer, nextBuffer, context);
                 break;
             case PipeRunMode.Blow:
-                throw new NotImplementedException();
-
-            default:
-                break;
-        }
-    }
-
-    void Parse(PipeReader pipeReader, BlockingCollection<T> sink)
-    {
-        var reader = XmlReader.Create(pipeReader.AsStream());
-
-        reader.MoveToContent();
-
-        while (reader.Read())
-        {
-            switch (reader.NodeType)
-            {
-                case XmlNodeType.Element:
-                    if (reader.LocalName == "page")
-                    {
-                        var page = (T)serializer.Deserialize(reader);
-
-                        sink.Add(page);
-                    }
-                    break;
-            }
-        }
-
-        sink.CompleteAdding();
-    }
-}
-
-public class QueryablePipeEnd<T> : IEnumerablePipeEnd<T>
-{
-    private readonly IQueryable<T> source;
-
-    public QueryablePipeEnd(IQueryable<T> source)
-    {
-        this.source = source;
-    }
-
-    public void Run(BlockingCollection<T> nextBuffer, IPipeContext context)
-    {
-        context.AddWorker("queryable");
-
-        switch (context.Mode)
-        {
-            case PipeRunMode.Suck:
-                context.Schedule("ingesting", progress =>
-                {
-                    var length = source.LongCount();
-
-                    progress.ReportTotal(length);
-
-                    var processed = 0L;
-
-                    foreach (var item in source)
-                    {
-                        nextBuffer.Add(item);
-
-                        progress.ReportProcessed(++processed);
-                    }
-
-                    nextBuffer.CompleteAdding();
-                });
-                break;
-            case PipeRunMode.Blow:
-                throw new NotImplementedException($"Blowing into a {nameof(QueryablePipeEnd<T>)} is not supported");
-            default:
-                break;
-        }
-    }
-}
-
-public class ActionPipeEnd<T> : IEnumerablePipeEnd<T>
-{
-    private readonly Action<T> action;
-
-    public ActionPipeEnd(Action<T> action)
-    {
-        this.action = action;
-    }
-
-    public void Run(BlockingCollection<T> nextBuffer, IPipeContext context)
-    {
-        context.AddWorker("action");
-
-        switch (context.Mode)
-        {
-            case PipeRunMode.Suck:
-                throw new NotImplementedException($"Sucking from a {nameof(ActionPipeEnd<T>)} is not supported");
-            case PipeRunMode.Blow:
-                context.Schedule("calling", () =>
-                {
-                    foreach (var item in nextBuffer.GetConsumingEnumerable())
-                    {
-                        action(item);
-                    }
-                });
-                break;
-            default:
-                break;
-        }
-    }
-}
-
-public class AsyncActionPipeEnd<T> : IEnumerablePipeEnd<T>
-{
-    private readonly Func<T, Task> action;
-
-    public AsyncActionPipeEnd(Func<T, Task> action)
-    {
-        this.action = action;
-    }
-
-    public void Run(BlockingCollection<T> nextBuffer, IPipeContext context)
-    {
-        context.AddWorker("action");
-
-        switch (context.Mode)
-        {
-            case PipeRunMode.Suck:
-                throw new NotImplementedException($"Sucking from a {nameof(ActionPipeEnd<T>)} is not supported");
-            case PipeRunMode.Blow:
-                context.Schedule("calling", async () =>
-                {
-                    foreach (var item in nextBuffer.GetConsumingEnumerable())
-                    {
-                        await action(item);
-                    }
-                });
+                if (backward is null) throw GetBlowingNotSupported(name);
+                backward(nextBuffer, buffer, context);
                 break;
             default:
                 break;
@@ -276,7 +150,7 @@ public class EnumerableTransformEnumerablePipeEnd<S, T> : IEnumerablePipeEnd<T>
                 context.Schedule("transforming", () => Transform(buffer, nextBuffer));
                 break;
             case PipeRunMode.Blow:
-                throw new Exception($"This worker does not support blowing");
+                throw GetBlowingNotSupported("transform");
             default:
                 break;
         }
@@ -378,26 +252,81 @@ public class TransformEnumerablePipeEnd<S, T> : IEnumerablePipeEnd<T>
 
 public static partial class PipeEnds
 {
+    public static IEnumerablePipeEnd<T> AsSpecificPipeEnd<T>(IPipeEnd<BlockingCollection<T>> source)
+        => new DelegateEnumerablePipeEnd<T>(source.Run);
+
+    public static IStreamPipeEnd AsSpecificPipeEnd(IPipeEnd<Pipe> source)
+        => new DelegateStreamPipeEnd(source.Run);
+
     public static IEnumerablePipeEnd<T> Enumerable<T>(PipeEnd<BlockingCollection<T>> implementation)
         => new DelegateEnumerablePipeEnd<T>(implementation);
 
+    public static IEnumerablePipeEnd<T> Enumerable<OB, T>(IPipeEnd<OB> sourcePipeEnd, String name, PipeWorker<OB, BlockingCollection<T>> forward, PipeWorker<BlockingCollection<T>, OB> backward)
+        where OB : class, new()
+        => new DelegateNestedEnumerablePipeEnd<OB, T>(sourcePipeEnd, name, forward, backward);
+
+    public static IEnumerablePipeEnd<T> Enumerable<T>(String name, TerminalPipeEndWorker<BlockingCollection<T>> producer, TerminalPipeEndWorker<BlockingCollection<T>> consumer)
+        => new DelegateEnumerablePipeEnd<T>((nextBuffer, context) =>
+    {
+        context.AddWorker(name);
+
+        switch (context.Mode)
+        {
+            case PipeRunMode.Suck:
+                if (producer is null) throw new Exception($"Sucking from a {name} is not supported");
+
+                producer(nextBuffer, context);
+                break;
+            case PipeRunMode.Blow:
+                if (consumer is null) throw new Exception($"Blowing into a {name} is not supported");
+
+                consumer(nextBuffer, context);
+                break;
+            default:
+                break;
+        }
+    });
+
     public static IStreamPipeEnd Stream(PipeEnd<Pipe> implementation)
         => new DelegateStreamPipeEnd(implementation);
+
+    public static IStreamPipeEnd Stream<OB>(IPipeEnd<OB> sourcePipeEnd, String name, PipeWorker<OB, Pipe> forward, PipeWorker<Pipe, OB> backward)
+        where OB : class, new()
+        => new DelegateNestedStreamPipeEnd<OB>(sourcePipeEnd, name, forward, backward);
+
+    public static IStreamPipeEnd Stream(IStreamPipeEnd sourcePipeEnd, String name, StreamWorker forward, StreamWorker backward)
+        => Stream(
+            sourcePipeEnd,
+            name,
+            (source, sink, context) => forward(source.Reader.AsStream(), sink.Writer.AsStream(), context),
+            (source, sink, context) => backward(source.Reader.AsStream(), sink.Writer.AsStream(), context));
+
+    public static IStreamPipeEnd WrapStream(this IStreamPipeEnd sourcePipeEnd, String name, StreamTransformation forward, StreamTransformation backward)
+        => Stream(sourcePipeEnd, name,
+            (source, sink, context) => forward(source.Reader.AsStream()).CopyTo(sink.Writer.AsStream()),
+            (source, sink, context) => backward(source.Reader.AsStream()).CopyTo(sink.Writer.AsStream()));
+
+    public static StreamWorker ToWorker(this StreamTransformation transformation)
+        => (source, sink, context) => transformation(source).CopyTo(sink);
 
     public static IStreamPipeEnd File(String fileName) => Stream((pipe, context) =>
     {
         var fileInfo = new FileInfo(fileName);
 
-        context.AddWorker("file");
+        context.AddWorker(nameof(File));
+
+        // FIXME: have progress reporting
 
         switch (context.Mode)
         {
             case PipeRunMode.Suck:
-                context.ScheduleAsync("reading", async ct =>
+                context.ScheduleAsync("reading", async (ct, progress) =>
                 {
+                    progress.ReportTotal(fileInfo.Length);
+
                     using var stream = fileInfo.OpenRead();
 
-                    await stream.CopyToAsync(pipe.Writer);
+                    await stream.CopyToAsync(pipe.Writer, ct);
 
                     pipe.Writer.Complete();
                 });
@@ -408,7 +337,7 @@ public static partial class PipeEnds
                 {
                     using var stream = fileInfo.OpenWrite();
 
-                    await pipe.Reader.CopyToAsync(stream);
+                    await pipe.Reader.CopyToAsync(stream, ct);
                 });
 
                 break;
@@ -417,18 +346,50 @@ public static partial class PipeEnds
         }
     });
 
-    public static IStreamPipeEnd Zip(this IStreamPipeEnd source) => new ZipPipeEnd(source);
-
     public static IEnumerablePipeEnd<T> FromQueryable<T>(this IQueryable<T> source)
-        => new QueryablePipeEnd<T>(source);
+        => Enumerable<T>(nameof(FromQueryable), (nextBuffer, context) =>
+    {
+        context.Schedule("querying", progress =>
+        {
+            var length = source.LongCount();
 
-    public static IEnumerablePipeEnd<T> FromAction<T>(Action<T> source)
-        => new ActionPipeEnd<T>(source);
+            progress.ReportTotal(length);
 
-    public static IEnumerablePipeEnd<T> FromAsyncAction<T>(Func<T, Task> source)
-        => new AsyncActionPipeEnd<T>(source);
+            var processed = 0L;
 
-    public static IEnumerablePipeEnd<T> ParseXml<T>(this IStreamPipeEnd source) => new ParserPipeEnd<T>(source);
+            foreach (var item in source)
+            {
+                nextBuffer.Add(item);
+
+                progress.ReportProcessed(++processed);
+            }
+
+            nextBuffer.CompleteAdding();
+        });
+    }, null);
+
+    public static IEnumerablePipeEnd<T> FromAction<T>(Action<T> action)
+        => Enumerable<T>(nameof(FromAction), null, (nextBuffer, context) => context.Schedule("calling", () =>
+        {
+            foreach (var item in nextBuffer.GetConsumingEnumerable())
+            {
+                action(item);
+            }
+        })
+    );
+
+    public static IEnumerablePipeEnd<T> FromAsyncAction<T>(Func<T, CancellationToken, Task> action)
+        => Enumerable<T>(nameof(FromAsyncAction), null, (nextBuffer, context) => context.ScheduleAsync("calling", async ct =>
+        {
+            foreach (var item in nextBuffer.GetConsumingEnumerable(ct))
+            {
+                await action(item, ct);
+            }
+        })
+    );
+
+    public static IEnumerablePipeEnd<T> Transform2<S, T>(this IEnumerablePipeEnd<S> source, Func<IEnumerable<S>, IEnumerable<T>> map)
+        => Enumerable<T>(nameof(Transform), )
 
     public static IEnumerablePipeEnd<T> Transform<S, T>(this IEnumerablePipeEnd<S> source, Func<IEnumerable<S>, IEnumerable<T>> map)
         => new EnumerableTransformEnumerablePipeEnd<S, T>(source, map);

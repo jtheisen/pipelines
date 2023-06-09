@@ -1,5 +1,11 @@
 ﻿namespace Pipelines;
 
+public static class StaticHelpers
+{
+    public static Exception GetBlowingNotSupported(String name) => new Exception($"Blowing into {name} is not supported");
+    public static Exception GetSuckingNotSupported(String name) => new Exception($"Sucking from {name} is not supported");
+}
+
 public static partial class Extensions
 {
     public static IEnumerablePipeEnd<T> Itemize<T, C>(
