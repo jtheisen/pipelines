@@ -376,7 +376,7 @@ public class TransformEnumerablePipeEnd<S, T> : IEnumerablePipeEnd<T>
     }
 }
 
-public static class PipeEnds
+public static partial class PipeEnds
 {
     public static IEnumerablePipeEnd<T> Enumerable<T>(PipeEnd<BlockingCollection<T>> implementation)
         => new DelegateEnumerablePipeEnd<T>(implementation);
