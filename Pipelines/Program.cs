@@ -6,11 +6,11 @@ var fileName = @"c:\users\jens\downloads\dewiki-20230501-pages-articles.xml.bz2"
 var sinkFileName = @"c:\users\jens\downloads\dewiki-20230501-pages-articles-copy.xml.bz2";
 
 
-var input = PipeEnds.File(fileName)
-    .Zip()
+var input = PipeEnds.FromFile(fileName)
+    .GZip()
     ;
 
-var output = PipeEnds.File(sinkFileName)
+var output = PipeEnds.FromFile(sinkFileName)
     //.Zip()
     ;
 

@@ -1,4 +1,7 @@
-﻿namespace Pipelines;
+﻿using System.Buffers;
+using System.IO.Pipelines;
+
+namespace Pipelines;
 
 public static class StaticHelpers
 {
@@ -8,52 +11,29 @@ public static class StaticHelpers
 
 public static partial class Extensions
 {
+    public static IStreamPipeEnd WrapStream(this IStreamPipeEnd sourcePipeEnd, String name, StreamTransformation forward, StreamTransformation backward)
+        => PipeEnds.CreateStream(sourcePipeEnd, name,
+            (source, sink, context) => forward(source.Reader.AsStream()).CopyTo(sink.Writer.AsStream()),
+            (source, sink, context) => backward(source.Reader.AsStream()).CopyTo(sink.Writer.AsStream()));
+
+    public static IEnumerablePipeEnd<T> AsSpecificPipeEnd<T>(this IPipeEnd<BlockingCollection<T>> source)
+        => new DelegateEnumerablePipeEnd<T>(source.Run);
+
+    public static IStreamPipeEnd AsSpecificPipeEnd(this IPipeEnd<Pipe> source)
+        => new DelegateStreamPipeEnd(source.Run);
+
     public static IEnumerablePipeEnd<T> Itemize<T, C>(
         this IStreamPipeEnd sourcePipeEnd,
         String name,
         C config,
         Action<TextReader, Action<T>, C> parse,
         Action<TextWriter, IEnumerable<T>, C> serialize
-    )
-        => PipeEnds.Enumerable<T>((nextBuffer, context) =>
-    {
-        var pipe = Buffers.MakeBuffer<Pipe>();
-
-        sourcePipeEnd.Run(pipe, context);
-
-        context.AddBuffer(pipe);
-
-        context.AddWorker(name);
-
-        switch (context.Mode)
-        {
-            case PipeRunMode.Suck:
-                context.Schedule("parsing", () =>
-                {
-                    var textReader = new StreamReader(pipe.Reader.AsStream());
-
-                    parse(textReader, nextBuffer.Add, config);
-
-                    nextBuffer.CompleteAdding();
-                });
-
-                break;
-            case PipeRunMode.Blow:
-                context.Schedule("serializing", () =>
-                {
-                    var textWriter = new StreamWriter(pipe.Writer.AsStream(), Encoding.UTF8);
-
-                    serialize(textWriter, nextBuffer.GetConsumingEnumerable(), config);
-
-                    textWriter.Flush();
-
-                    pipe.Writer.Complete();
-                });
-                break;
-            default:
-                break;
-        }
-    });
+    ) => PipeEnds.CreateEnumerable(
+        sourcePipeEnd,
+        name,
+        parse?.Apply(p => CreateParser<T, C>((pipe, sink, c) => p(new StreamReader(pipe.Reader.AsStream()), sink, c), config)),
+        serialize?.Apply(s => CreateSerializer<T, C>((pipe, source, c) => s(new StreamWriter(pipe.Writer.AsStream()), source, c), config))
+    );
 
     public static IEnumerablePipeEnd<T> Itemize<T, C>(
         this IStreamPipeEnd sourcePipeEnd,
@@ -61,44 +41,65 @@ public static partial class Extensions
         C config,
         Action<Stream, Action<T>, C> parse,
         Action<Stream, IEnumerable<T>, C> serialize
-    )
-        => PipeEnds.Enumerable<T>((nextBuffer, context) =>
+    ) => PipeEnds.CreateEnumerable(
+        sourcePipeEnd,
+        name,
+        parse?.Apply(p => CreateParser<T, C>((pipe, sink, c) => p(pipe.Reader.AsStream(), sink, c), config)),
+        serialize?.Apply(s => CreateSerializer<T, C>((pipe, source, c) => s(pipe.Writer.AsStream(), source, c), config))
+    );
+
+    static PipeWorker<Pipe, BlockingCollection<T>> CreateParser<T, C>(Action<Pipe, Action<T>, C> parse, C config)
+    {
+        void Run(Pipe source, BlockingCollection<T> sink, IPipeContext context)
         {
-            var pipe = Buffers.MakeBuffer<Pipe>();
-
-            sourcePipeEnd.Run(pipe, context);
-
-            context.AddBuffer(pipe);
-
-            context.AddWorker(name);
-
-            switch (context.Mode)
+            void Parse()
             {
-                case PipeRunMode.Suck:
-                    context.Schedule("parsing", () =>
-                    {
-                        var stream = pipe.Reader.AsStream();
+                parse(source, sink.Add, config);
 
-                        parse(stream, nextBuffer.Add, config);
-
-                        nextBuffer.CompleteAdding();
-                    });
-
-                    break;
-                case PipeRunMode.Blow:
-                    context.Schedule("serializing", () =>
-                    {
-                        var stream = pipe.Writer.AsStream();
-
-                        serialize(stream, nextBuffer.GetConsumingEnumerable(), config);
-
-                        stream.Flush();
-
-                        pipe.Writer.Complete();
-                    });
-                    break;
-                default:
-                    break;
+                sink.CompleteAdding();
             }
-        });
+
+            context.Schedule("parse", Parse);
+        }
+
+        return Run;
+    }
+
+    static PipeWorker<BlockingCollection<T>, Pipe> CreateSerializer<T, C>(Action<Pipe, IEnumerable<T>, C> serialize, C config)
+    {
+        void Run(BlockingCollection<T> source, Pipe sink, IPipeContext context)
+        {
+            void Serialize()
+            {
+                serialize(sink, source.GetConsumingEnumerable(), config);
+
+                sink.Writer.Complete();
+            }
+
+            context.Schedule("parse", Serialize);
+        }
+
+        return Run;
+    }
+
+    public static void CopyTo(this Stream source, Stream sink, Action step, Int32 bufferSize = 81920)
+    {
+        var buffer = ArrayPool<Byte>.Shared.Rent(bufferSize);
+
+        try
+        {
+            Int32 count;
+
+            while ((count = source.Read(buffer, 0, buffer.Length)) != 0)
+            {
+                sink.Write(buffer, 0, count);
+
+                step();
+            }
+        }
+        finally
+        {
+            ArrayPool<Byte>.Shared.Return(buffer);
+        }
+    }
 }

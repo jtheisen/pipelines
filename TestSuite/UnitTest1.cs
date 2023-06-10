@@ -13,7 +13,7 @@ public class BasicParsingTests
     [TestMethod]
     public void TestMethod1()
     {
-        TestPipeEnd(PipeEnds.File(@"files/input.xml").ParseXml<Entry>());
+        TestPipeEnd(PipeEnds.FromFile(@"files/input.xml").Xml<Entry>());
     }
 
     static String[] expectedNames = new[] { "foo", "bar", "baz" };

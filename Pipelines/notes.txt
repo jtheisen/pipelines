@@ -1,2 +1,3 @@
-﻿- When one worker fails, the others are not cancelled
-- Support cancellation
+﻿- Support cancellation even for synchronous workers (in case of them not being purely synchronous and to not necessitate thread abortion)
+- Almost nothing is tested yet
+

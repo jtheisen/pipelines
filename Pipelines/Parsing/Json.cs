@@ -5,7 +5,7 @@ namespace Pipelines.Json;
 public static partial class JsonExtensions
 {
     public static IEnumerablePipeEnd<T> Json<T>(IStreamPipeEnd sourcePipeEnd, JsonSerializerOptions options)
-        => PipeEnds.Enumerable<T>((nextBuffer, context) =>
+        => PipeEnds.CreateEnumerable<T>((nextBuffer, context) =>
      {
          var pipe = Buffers.MakeBuffer<Pipe>();
 
