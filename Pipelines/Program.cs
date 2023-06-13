@@ -18,6 +18,6 @@ AnsiConsole.MarkupLine("Running pipeline");
 
 var pipeline = input.BuildCopyingPipeline(output);
 
-pipeline.Start()
+pipeline.Run()
     .ReportSpectre()
     .Wait();

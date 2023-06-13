@@ -16,7 +16,7 @@ public static partial class Extensions
                 }
             }
 
-            context.Schedule(verb, Copy);
+            context.ScheduleSync(verb, Copy);
         }
 
         return Run;
@@ -37,7 +37,7 @@ public static partial class Extensions
                 }
             }
 
-            context.Schedule(verb, Copy);
+            context.ScheduleSync(verb, Copy);
         }
 
         return Run;

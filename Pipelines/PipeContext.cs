@@ -12,7 +12,48 @@ public class PipeWorkerPart : PipePart
     public String Name { get; init; }
     public String Verb { get; set; }
     public WorkerInputProgress Progress { get; set; }
-    public Task Task { get; set; }
+
+    public PipeWorkerPartTask WorkerTask { get; set; }
+
+    public Task Task => WorkerTask.Task;
+}
+
+public abstract class PipeWorkerPartTask
+{
+    public TaskFactory TaskFactory { get; protected set; }
+    public Task Task { get; protected set; }
+}
+
+
+public class PipeAsyncWorkerPartTask : PipeWorkerPartTask
+{
+    private readonly Func<CancellationToken, Task> run;
+
+    public PipeAsyncWorkerPartTask(Func<CancellationToken, Task> run)
+    {
+        this.run = run;
+    }
+
+    public void Start(CancellationToken ct)
+    {
+        Task = run(ct);
+    }
+}
+
+public class PipeSyncWorkerPartTask : PipeWorkerPartTask
+{
+    private readonly Action<CancellationToken> run;
+
+    public PipeSyncWorkerPartTask(Action<CancellationToken> run)
+    {
+        this.run = run;
+    }
+
+    public void Start(TaskFactory taskFactory, CancellationToken ct)
+    {
+        TaskFactory = taskFactory;
+        Task = (taskFactory ?? Task.Factory).StartNew(() => run(ct), ct);
+    }
 }
 
 public enum PipeRunMode
@@ -48,9 +89,9 @@ public interface IPipeContext
 
     void AddWorker(String name);
 
-    void Schedule(String verb, Action<IWorkerInputProgress> task);
+    void ScheduleSync(String verb, Action<IWorkerInputProgress> task);
 
-    void Schedule(String verb, Action task);
+    void ScheduleSync(String verb, Action task);
 
     void ScheduleAsync(String verb, Func<CancellationToken, Task> task);
 
@@ -61,15 +102,13 @@ public class PipeContext : IPipeContext
 {
     PipeRunMode mode;
     List<PipePart> parts;
-    CancellationToken ct;
 
     public PipeRunMode Mode => mode;
 
-    public PipeContext(PipeRunMode mode, CancellationToken ct)
+    public PipeContext(PipeRunMode mode)
     {
         this.mode = mode;
         this.parts = new List<PipePart>();
-        this.ct = ct;
     }
 
     public IEnumerable<PipePart> Parts => parts;
@@ -78,7 +117,7 @@ public class PipeContext : IPipeContext
 
     public void AddWorker(String name) => parts.Add(new PipeWorkerPart { Name = name });
 
-    void SetTask(String verb, Func<IWorkerInputProgress, Task> getTask)
+    void SetTask(String verb, Func<WorkerInputProgress, PipeWorkerPartTask> getWorkerTask)
     {
         var lastPart = parts.LastOrDefault() as PipeWorkerPart;
 
@@ -86,21 +125,30 @@ public class PipeContext : IPipeContext
 
         var progress = new WorkerInputProgress();
 
-        lastPart.Task = getTask(progress);
         lastPart.Verb = verb;
         lastPart.Progress = progress;
+        lastPart.WorkerTask = getWorkerTask(progress);
     }
 
-    public void Schedule(String verb, Action task) => SetTask(verb, _ => Task.Run(task, ct));
-    public void Schedule(String verb, Action<IWorkerInputProgress> task) => SetTask(verb, p => Task.Run(() => task(p), ct));
+    public void ScheduleSync(String verb, Action task)
+        => SetTask(verb, _ => new PipeSyncWorkerPartTask(_ => task()));
+    public void ScheduleSync(String verb, Action<IWorkerInputProgress> task)
+        => SetTask(verb, p => new PipeSyncWorkerPartTask(_ => task(p)));
 
-    public void ScheduleAsync(String verb, Func<CancellationToken, Task> task) => SetTask(verb, _ => task(ct));
-    public void ScheduleAsync(String verb, Func<CancellationToken, IWorkerInputProgress, Task> task) => SetTask(verb, p => task(ct, p));
+    public void ScheduleSync(String verb, Action<CancellationToken> task)
+        => SetTask(verb, _ => new PipeSyncWorkerPartTask(task));
+    public void ScheduleSync(String verb, Action<IWorkerInputProgress, CancellationToken> task)
+        => SetTask(verb, p => new PipeSyncWorkerPartTask(ct => task(p, ct)));
+
+    public void ScheduleAsync(String verb, Func<CancellationToken, Task> task)
+        => SetTask(verb, _ => new PipeAsyncWorkerPartTask(ct => task(ct)));
+    public void ScheduleAsync(String verb, Func<CancellationToken, IWorkerInputProgress, Task> task)
+        => SetTask(verb, p => new PipeAsyncWorkerPartTask(ct => task(ct, p)));
 }
 
 public interface IPipeline
 {
-    void Run(out LivePipeline livePipeline);
+    LivePipeline Run(Func<CancellationToken, TaskFactory> createTaskFactory = null);
 }
 
 public class Pipeline<B> : IPipeline
@@ -115,22 +163,46 @@ public class Pipeline<B> : IPipeline
         this.sink = sink;
     }
 
-    public void Run(out LivePipeline livePipeline)
+    public LivePipeline Run(Func<CancellationToken, TaskFactory> createTaskFactory = null)
     {
-        livePipeline = Instantiate();
+        return Instantiate(createTaskFactory);
     }
 
-    LivePipeline Instantiate()
+    LivePipeline Instantiate(Func<CancellationToken, TaskFactory> createTaskFactory)
     {
         var cts = new CancellationTokenSource();
 
-        var buffer = new B();
+        var ct = cts.Token;
 
-        var suckingContext = new PipeContext(PipeRunMode.Suck, cts.Token);
-        var blowingContext = new PipeContext(PipeRunMode.Blow, cts.Token);
+        var buffer = Buffers.MakeBuffer<B>();
+
+        var suckingContext = new PipeContext(PipeRunMode.Suck);
+        var blowingContext = new PipeContext(PipeRunMode.Blow);
 
         source.Run(buffer, suckingContext);
         sink.Run(buffer, blowingContext);
+
+        var workerParts = suckingContext.Parts.Concat(blowingContext.Parts).OfType<PipeWorkerPart>().ToArray();
+
+        foreach (var part in workerParts)
+        {
+            var workerTask = part.WorkerTask;
+
+            if (workerTask is PipeSyncWorkerPartTask syncWorkerTask)
+            {
+                var taskFactory = createTaskFactory?.Invoke(ct);
+
+                syncWorkerTask.Start(taskFactory, ct);
+            }
+            else if (workerTask is PipeAsyncWorkerPartTask asyncWorkerTask)
+            {
+                asyncWorkerTask.Start(ct);
+            }
+            else
+            {
+                throw new Exception($"Unexpected worker task {workerTask}");
+            }
+        }
 
         var parts = suckingContext.Parts
             .Concat(new[] { new PipeBufferPart { Buffer = buffer } })
@@ -154,16 +226,30 @@ public class LivePipeline
         this.parts = parts.ToArray();
         this.cts = cts;
 
-        var tasks = (
-            from p in parts.OfType<PipeWorkerPart>()
-            let t = p.Task
-            where t is not null
-            select t
-        ).ToList();
+        task = Run();
+    }
 
-        tasks.ForEach(t => t.ContinueWith(HandleFaultedTask, TaskContinuationOptions.OnlyOnFaulted));
+    async Task Run()
+    {
+        var workerTasks = parts.OfType<PipeWorkerPart>().Select(p => p.WorkerTask).ToList();
 
-        task = Task.WhenAll(tasks);
+        workerTasks.ForEach(t => t.Task.ContinueWith(HandleFaultedTask, TaskContinuationOptions.OnlyOnFaulted));
+
+        await Task.WhenAll(workerTasks.Select(p => p.Task));
+
+        foreach (var workerTask in  workerTasks)
+        {
+            if (workerTask.TaskFactory?.Scheduler is not TaskScheduler taskScheduler) continue;
+
+            if (taskScheduler is SingleThreadTaskScheduler singleThreadTaskScheduler)
+            {
+                singleThreadTaskScheduler.Join();
+            }
+            else
+            {
+                throw new Exception($"Unexpected task scheduler {taskScheduler} in factory");
+            }
+        }
     }
 
     void HandleFaultedTask(Task _) => Cancel();
@@ -179,6 +265,7 @@ public class LivePipeline
     {
         cts.Cancel();
     }
+
 
     static PipeReportPart GetReportPart(PipePart part) => part switch
     {

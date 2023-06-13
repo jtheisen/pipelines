@@ -22,7 +22,7 @@ public static partial class JsonExtensions
 
                  break;
              case PipeRunMode.Blow:
-                 context.Schedule("serializing", ct => SerializeJson(pipe.Writer.AsStream(), nextBuffer.GetConsumingEnumerable(), options));
+                 context.ScheduleSync("serializing", ct => SerializeJson(pipe.Writer.AsStream(), nextBuffer.GetConsumingEnumerable(), options));
 
                  break;
              default:

@@ -146,7 +146,7 @@ public static partial class PipeEnds
         => Create(name, producer, consumer).AsSpecificPipeEnd();
 
     static TerminalPipeEndWorker<Pipe> MakeStreamProducerWorker(this StreamOpener openSource)
-        => (pipe, context) => context.Schedule("reading", progress =>
+        => (pipe, context) => context.ScheduleSync("reading", progress =>
         {
             var (source, leaveOpen) = openSource();
 
@@ -171,13 +171,13 @@ public static partial class PipeEnds
         });
 
     static TerminalPipeEndWorker<Pipe> MakeStreamConsumerWorker(this StreamOpener openSink)
-        => (pipe, context) => context.Schedule("writing", () =>
+        => (pipe, context) => context.ScheduleSync("writing", () =>
         {
             var (sink, leaveOpen) = openSink();
 
             try
             {
-                pipe.Writer.AsStream().CopyTo(sink);
+                pipe.Reader.AsStream().CopyTo(sink);
 
                 sink.Flush();
             }
@@ -247,7 +247,7 @@ public static partial class PipeEnds
     public static IEnumerablePipeEnd<T> FromEnumerable<T>(IEnumerable<T> source)
         => CreateEnumerable<T>(nameof(FromQueryable), (nextBuffer, context) =>
     {
-        context.Schedule("enumerating", progress =>
+        context.ScheduleSync("enumerating", progress =>
         {
             if (source.TryGetNonEnumeratedCount(out var length))
             {
@@ -270,7 +270,7 @@ public static partial class PipeEnds
     public static IEnumerablePipeEnd<T> FromQueryable<T>(IQueryable<T> source, Boolean dontQueryCount = false)
         => CreateEnumerable<T>(nameof(FromQueryable), (nextBuffer, context) =>
     {
-        context.Schedule("querying", progress =>
+        context.ScheduleSync("querying", progress =>
         {
             if (!dontQueryCount)
             {
@@ -292,8 +292,8 @@ public static partial class PipeEnds
         });
     }, null);
 
-    public static IEnumerablePipeEnd<T> FromAction<T>(Action<T> action)
-        => CreateEnumerable<T>(nameof(FromAction), null, (nextBuffer, context) => context.Schedule("calling", () =>
+    public static IEnumerablePipeEnd<T> FromAction<T>(Action<T> action, String name = null)
+        => CreateEnumerable<T>(name ?? nameof(FromAction), null, (nextBuffer, context) => context.ScheduleSync("calling", () =>
         {
             foreach (var item in nextBuffer.GetConsumingEnumerable())
             {
@@ -302,8 +302,8 @@ public static partial class PipeEnds
         })
     );
 
-    public static IEnumerablePipeEnd<T> FromAsyncAction<T>(Func<T, CancellationToken, Task> action)
-        => CreateEnumerable<T>(nameof(FromAsyncAction), null, (nextBuffer, context) => context.ScheduleAsync("calling", async ct =>
+    public static IEnumerablePipeEnd<T> FromAsyncAction<T>(Func<T, CancellationToken, Task> action, String name = null)
+        => CreateEnumerable<T>(name ?? nameof(FromAsyncAction), null, (nextBuffer, context) => context.ScheduleAsync("calling", async ct =>
         {
             foreach (var item in nextBuffer.GetConsumingEnumerable(ct))
             {
@@ -311,6 +311,9 @@ public static partial class PipeEnds
             }
         })
     );
+
+    public static IEnumerablePipeEnd<T> EnumerableBlackhole<T>()
+        => FromAction<T>(_ => { }, nameof(EnumerableBlackhole));
 
     public static IPipeline BuildCopyingPipeline<B>(this IPipeEnd<B> source, IPipeEnd<B> sink)
         where B : class, new()
@@ -323,7 +326,7 @@ public static partial class PipeEnds
     {
         var pipeline = source.BuildCopyingPipeline(sink);
 
-        return pipeline.Start();
+        return pipeline.Run();
     }
 
     public static Task CopyToAsync<B>(this IPipeEnd<B> source, IPipeEnd<B> sink)
@@ -363,13 +366,6 @@ public static partial class PipeEnds
 
     public static void WriteAll<T>(this IEnumerablePipeEnd<T> sink, IEnumerable<T> items)
         => sink.WriteAllAsync(items).Wait();
-
-    public static LivePipeline Start(this IPipeline pipeline)
-    {
-        pipeline.Run(out var livePipeline);
-        
-        return livePipeline;
-    }
 
     public static void Wait(this LivePipeline pipeline) => pipeline.Task.Wait();
 

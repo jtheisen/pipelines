@@ -13,8 +13,8 @@ public static partial class Extensions
 {
     public static IStreamPipeEnd WrapStream(this IStreamPipeEnd sourcePipeEnd, String name, StreamTransformation forward, StreamTransformation backward)
         => PipeEnds.CreateStream(sourcePipeEnd, name,
-            (source, sink, context) => forward(source.Reader.AsStream()).CopyTo(sink.Writer.AsStream()),
-            (source, sink, context) => backward(source.Reader.AsStream()).CopyTo(sink.Writer.AsStream()));
+            (source, sink, context) => context.ScheduleAsync("", ct => forward(source.Reader.AsStream()).CopyToAsync(sink.Writer.AsStream(), ct)),
+            (source, sink, context) => context.ScheduleAsync("", ct => backward(source.Reader.AsStream()).CopyToAsync(sink.Writer.AsStream(), ct)));
 
     public static IEnumerablePipeEnd<T> AsSpecificPipeEnd<T>(this IPipeEnd<BlockingCollection<T>> source)
         => new DelegateEnumerablePipeEnd<T>(source.Run);
@@ -59,7 +59,7 @@ public static partial class Extensions
                 sink.CompleteAdding();
             }
 
-            context.Schedule("parse", Parse);
+            context.ScheduleSync("parse", Parse);
         }
 
         return Run;
@@ -76,7 +76,7 @@ public static partial class Extensions
                 sink.Writer.Complete();
             }
 
-            context.Schedule("parse", Serialize);
+            context.ScheduleSync("parse", Serialize);
         }
 
         return Run;
