@@ -1,104 +1,107 @@
 ﻿using Spectre.Console;
+using System;
+using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 
-namespace Pipelines;
-
-public class SpectreReporter
+namespace Pipelines
 {
-    public String GetLineForPart(PipeReportPart part) => part switch
+    public class SpectreReporter
     {
-        PipeReportBufferPart b => $" │ {Bar((Int32)b.State, 2, "gray35", "gray15")} ({1.0 * b.Content / b.Size:p})",
-        PipeReportWorker w => $"{w.Name}",
-        _ => "?"
-    };
+        public String GetLineForPart(PipeReportPart part) => part switch
+        {
+            PipeReportBufferPart b => $" │ {Bar((Int32)b.State, 2, "gray35", "gray15")} ({1.0 * b.Content / b.Size:p})",
+            PipeReportWorker w => $"{w.Name}",
+            _ => "?"
+        };
 
-    public String GetProgressText(WorkerInputProgress progress)
-        => progress.Processed > 0 ? $"{progress.Processed}{(progress.Total > 0 ? $" / {progress.Total}" : "")}" : "";
+        public String GetProgressText(WorkerInputProgress progress)
+            => progress.Processed > 0 ? $"{progress.Processed}{(progress.Total > 0 ? $" / {progress.Total}" : "")}" : "";
 
-    public String RenderProgressBar(Int32 width, Double progress, String text)
-    {
-        var w = (Int32)(width * progress);
+        public String RenderProgressBar(Int32 width, Double progress, String text)
+        {
+            var w = (Int32)(width * progress);
 
-        var totalText = text.PadRight(width);
+            var totalText = text.PadRight(width);
 
-        var b = new StringBuilder();
+            var b = new StringBuilder();
 
-        b.Append("[black on white]");
+            b.Append("[black on white]");
 
-        b.Append(totalText[..w]);
+            b.Append(totalText[..w]);
 
-        b.Append("[/][white on black]");
+            b.Append("[/][white on black]");
 
-        b.Append(totalText[w..]);
+            b.Append(totalText[w..]);
 
-        b.Append("[/]");
+            b.Append("[/]");
 
-        return b.ToString();
+            return b.ToString();
+        }
+
+        String Bar(Int32 content, Int32 size, String foreground, String background)
+            => $"{Bar(content, foreground)}{Bar(size - content, background)}";
+
+        String Bar(Int32 size, String color)
+            => $"[default on {color}]{new String(' ', size)}[/]";
     }
 
-    String Bar(Int32 content, Int32 size, String foreground, String background)
-        => $"{Bar(content, foreground)}{Bar(size - content, background)}";
-
-    String Bar(Int32 size, String color)
-        => $"[default on {color}]{new String(' ', size)}[/]";
-}
-
-public static class ConsoleExtensions
-{
-    public static LivePipeline ReportSpectre(this LivePipeline livePipeline, SpectreReporter reporter = null)
+    public static class ConsoleExtensions
     {
-        reporter ??= new SpectreReporter();
+        public static LivePipeline ReportSpectre(this LivePipeline livePipeline, SpectreReporter reporter = null)
+        {
+            reporter ??= new SpectreReporter();
 
-        var table = new Table();
+            var table = new Table();
 
-        table.Border = TableBorder.None;
+            table.Border = TableBorder.None;
 
-        table.AddColumn("");
+            table.AddColumn("");
 
-        
-        AnsiConsole.Live(table)
-            .StartAsync(async ctx =>
-            {
-                while (!livePipeline.Task.IsCompleted)
+
+            AnsiConsole.Live(table)
+                .StartAsync(async ctx =>
                 {
-                    await Task.Delay(250);
-
+                    while (!livePipeline.Task.IsCompleted)
                     {
-                        var report = livePipeline.GetReport();
+                        await Task.Delay(250);
 
-                        table.Rows.Clear();
-
-                        if (report.Parts.FirstOrDefault() is PipeReportWorker inputReport)
                         {
-                            var progressText = reporter.GetProgressText(inputReport.Progress);
+                            var report = livePipeline.GetReport();
 
-                            var p = inputReport.Progress;
+                            table.Rows.Clear();
 
-                            if (p.Processed > 0 && p.Total > 0)
+                            if (report.Parts.FirstOrDefault() is PipeReportWorker inputReport)
                             {
-                                var pf = 1.0 * p.Processed / p.Total;
+                                var progressText = reporter.GetProgressText(inputReport.Progress);
 
-                                var renderedProgress = reporter.RenderProgressBar(Console.WindowWidth, pf, progressText);
+                                var p = inputReport.Progress;
 
-                                table.AddRow(renderedProgress);
+                                if (p.Processed > 0 && p.Total > 0)
+                                {
+                                    var pf = 1.0 * p.Processed / p.Total;
+
+                                    var renderedProgress = reporter.RenderProgressBar(Console.WindowWidth, pf, progressText);
+
+                                    table.AddRow(renderedProgress);
+                                }
+                                else
+                                {
+                                    table.AddRow(progressText);
+                                }
                             }
-                            else
+
+                            foreach (var part in report.Parts)
                             {
-                                table.AddRow(progressText);
+                                table.AddRow(reporter.GetLineForPart(part));
                             }
                         }
 
-                        foreach (var part in report.Parts)
-                        {
-                            table.AddRow(reporter.GetLineForPart(part));
-                        }
+                        ctx.Refresh();
                     }
+                });
 
-                    ctx.Refresh();
-                }
-            });
-
-        return livePipeline;
+            return livePipeline;
+        }
     }
-
 }

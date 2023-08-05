@@ -1,20 +1,24 @@
 ﻿using CsvHelper;
 using CsvHelper.Configuration;
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 
-namespace Pipelines.CsvHelper;
-
-public static class Iso8601Cultures
+namespace Pipelines.CsvHelper
 {
-    public static CultureInfo Seconds = Create(0);
-    public static CultureInfo Milliseconds = Create(3);
-
-    public static CultureInfo Create(Int32 subSecondDigits = 0, String baseCultureName = "en-US")
+    public static class Iso8601Cultures
     {
-        var subSeconds = GetSubSecondDigitFormat(subSecondDigits);
+        public static CultureInfo Seconds = Create(0);
+        public static CultureInfo Milliseconds = Create(3);
 
-        return new CultureInfo(baseCultureName)
+        public static CultureInfo Create(Int32 subSecondDigits = 0, String baseCultureName = "en-US")
         {
-            DateTimeFormat =
+            var subSeconds = GetSubSecondDigitFormat(subSecondDigits);
+
+            return new CultureInfo(baseCultureName)
+            {
+                DateTimeFormat =
             {
                 LongDatePattern = "yyyy-MM-dd",
                 ShortDatePattern = "yyyy-MM-dd",
@@ -22,36 +26,37 @@ public static class Iso8601Cultures
                 LongTimePattern = $"HH:mm:ss{subSeconds}",
                 ShortTimePattern = "HH:mm:ss"
             },
-        };
-    }
-
-    static String GetSubSecondDigitFormat(Int32 length) => length == 0 ? "" : "." + new String('f', length);
-}
-
-public static partial class CsvExtensions
-{
-    public static IEnumerablePipeEnd<T> Csv<T>(IStreamPipeEnd sourcePipeEnd, CultureInfo cultureInfo)
-        => sourcePipeEnd.Itemize<T, CsvConfiguration>(nameof(Csv), new CsvConfiguration(cultureInfo), ParseCsv, SerializeCsv);
-
-    public static IEnumerablePipeEnd<T> Csv<T>(IStreamPipeEnd sourcePipeEnd, CsvConfiguration config)
-        => sourcePipeEnd.Itemize<T, CsvConfiguration>(nameof(Csv), config, ParseCsv, SerializeCsv);
-
-    static void ParseCsv<T>(TextReader reader, Action<T> sink, CsvConfiguration config)
-    {
-        var csvReader = new CsvReader(reader, config);
-
-        foreach (var record in csvReader.GetRecords<T>())
-        {
-            sink(record);
+            };
         }
+
+        static String GetSubSecondDigitFormat(Int32 length) => length == 0 ? "" : "." + new String('f', length);
     }
 
-    static void SerializeCsv<T>(TextWriter writer, IEnumerable<T> source, CsvConfiguration config)
+    public static partial class CsvExtensions
     {
-        var csvWriter = new CsvWriter(writer, config);
+        public static IEnumerablePipeEnd<T> Csv<T>(IStreamPipeEnd sourcePipeEnd, CultureInfo cultureInfo)
+            => sourcePipeEnd.Itemize<T, CsvConfiguration>(nameof(Csv), new CsvConfiguration(cultureInfo), ParseCsv, SerializeCsv);
 
-        csvWriter.WriteRecords(source);
+        public static IEnumerablePipeEnd<T> Csv<T>(IStreamPipeEnd sourcePipeEnd, CsvConfiguration config)
+            => sourcePipeEnd.Itemize<T, CsvConfiguration>(nameof(Csv), config, ParseCsv, SerializeCsv);
 
-        csvWriter.Flush();
+        static void ParseCsv<T>(TextReader reader, Action<T> sink, CsvConfiguration config)
+        {
+            var csvReader = new CsvReader(reader, config);
+
+            foreach (var record in csvReader.GetRecords<T>())
+            {
+                sink(record);
+            }
+        }
+
+        static void SerializeCsv<T>(TextWriter writer, IEnumerable<T> source, CsvConfiguration config)
+        {
+            var csvWriter = new CsvWriter(writer, config);
+
+            csvWriter.WriteRecords(source);
+
+            csvWriter.Flush();
+        }
     }
 }

@@ -1,48 +1,55 @@
-﻿using System.Text.Json;
+﻿using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Pipelines;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 
-namespace Pipelines.Json;
-
-public static partial class JsonExtensions
+namespace Pipelines.Json
 {
-    public static IEnumerablePipeEnd<T> Json<T>(IStreamPipeEnd sourcePipeEnd, JsonSerializerOptions options)
-        => PipeEnds.CreateEnumerable<T>((nextBuffer, context) =>
-     {
-         var pipe = Buffers.MakeBuffer<Pipe>();
-
-         sourcePipeEnd.Run(pipe, context);
-
-         context.AddBuffer(pipe);
-
-         context.AddWorker("json");
-
-         switch (context.Mode)
+    public static partial class JsonExtensions
+    {
+        public static IEnumerablePipeEnd<T> Json<T>(IStreamPipeEnd sourcePipeEnd, JsonSerializerOptions options)
+            => PipeEnds.CreateEnumerable<T>((nextBuffer, context) =>
          {
-             case PipeRunMode.Suck:
-                 context.ScheduleAsync("parsing", ct => ParseJsonAsync(pipe.Reader.AsStream(), nextBuffer, options, ct));
+             var pipe = Buffers.MakeBuffer<Pipe>();
 
-                 break;
-             case PipeRunMode.Blow:
-                 context.ScheduleSync("serializing", ct => SerializeJson(pipe.Writer.AsStream(), nextBuffer.GetConsumingEnumerable(), options));
+             sourcePipeEnd.Run(pipe, context);
 
-                 break;
-             default:
-                 break;
-         }
+             context.AddBuffer(pipe);
 
-     });
+             context.AddWorker("json");
 
-    static async Task ParseJsonAsync<T>(Stream inputStream, BlockingCollection<T> sink, JsonSerializerOptions options, CancellationToken ct)
-    {
-        var asyncEnumerable = JsonSerializer.DeserializeAsyncEnumerable<T>(inputStream, options);
+             switch (context.Mode)
+             {
+                 case PipeRunMode.Suck:
+                     context.ScheduleAsync("parsing", ct => ParseJsonAsync(pipe.Reader.AsStream(), nextBuffer, options, ct));
 
-        await foreach (var item in asyncEnumerable)
+                     break;
+                 case PipeRunMode.Blow:
+                     context.ScheduleSync("serializing", ct => SerializeJson(pipe.Writer.AsStream(), nextBuffer.GetConsumingEnumerable(), options));
+
+                     break;
+                 default:
+                     break;
+             }
+
+         });
+
+        static async Task ParseJsonAsync<T>(Stream inputStream, BlockingCollection<T> sink, JsonSerializerOptions options, CancellationToken ct)
         {
-            sink.Add(item, ct);
-        }
-    }
+            var asyncEnumerable = JsonSerializer.DeserializeAsyncEnumerable<T>(inputStream, options);
 
-    static void SerializeJson<T>(Stream outputStream, IEnumerable<T> source, JsonSerializerOptions options)
-    {
-        JsonSerializer.Serialize(outputStream, source, options);
+            await foreach (var item in asyncEnumerable)
+            {
+                sink.Add(item, ct);
+            }
+        }
+
+        static void SerializeJson<T>(Stream outputStream, IEnumerable<T> source, JsonSerializerOptions options)
+        {
+            JsonSerializer.Serialize(outputStream, source, options);
+        }
     }
 }

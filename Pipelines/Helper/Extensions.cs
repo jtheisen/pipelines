@@ -1,14 +1,17 @@
-﻿namespace Pipelines;
+﻿using System;
 
-public static partial class Extensions
+namespace Pipelines
 {
-    public static S Apply<S>(this S source, Action<S> func)
+    public static partial class Extensions
     {
-        func(source);
+        public static S Apply<S>(this S source, Action<S> func)
+        {
+            func(source);
 
-        return source;
+            return source;
+        }
+
+        public static T Apply<S, T>(this S source, Func<S, T> func)
+            => func(source);
     }
-
-    public static T Apply<S, T>(this S source, Func<S, T> func)
-        => func(source);
 }

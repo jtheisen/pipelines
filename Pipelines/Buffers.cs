@@ -2,153 +2,154 @@
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 
-namespace Pipelines;
-
-public interface IBufferHandler
+namespace Pipelines
 {
-    PipeReportBufferPart GetReport(Object buffer);
-
-    Object MakeBuffer();
-}
-
-public abstract class AbstractBufferHandler<B> : IBufferHandler
-{
-    public PipeReportBufferPart GetReport(Object buffer) => GetReportImpl((B)buffer);
-
-    public abstract PipeReportBufferPart GetReportImpl(B buffer);
-
-    public Object MakeBuffer() => MakeBufferImpl();
-
-    public abstract B MakeBufferImpl();
-}
-
-public class BlockingCollectionBufferHandler<T> : AbstractBufferHandler<BlockingCollection<T>>
-{
-    public override PipeReportBufferPart GetReportImpl(BlockingCollection<T> buffer) => buffer.GetReport();
-
-    public override BlockingCollection<T> MakeBufferImpl() => new BlockingCollection<T>(1024);
-}
-
-public class PipeBufferHandler : AbstractBufferHandler<Pipe>
-{
-    public override PipeReportBufferPart GetReportImpl(Pipe buffer) => buffer.GetReport();
-
-    public override Pipe MakeBufferImpl() => new Pipe();
-}
-
-public static class BufferHandlers
-{
-    static ConcurrentDictionary<Type, IBufferHandler> handlers;
-
-    static BufferHandlers()
+    public interface IBufferHandler
     {
-        handlers = new ConcurrentDictionary<Type, IBufferHandler>();
+        PipeReportBufferPart GetReport(Object buffer);
+
+        Object MakeBuffer();
     }
 
-    public static IBufferHandler GetHandler(Type bufferType)
-        => handlers.GetOrAdd(bufferType, ChooseHandler);
-
-    static IBufferHandler ChooseHandler(Type type)
+    public abstract class AbstractBufferHandler<B> : IBufferHandler
     {
-        if (type == typeof(Pipe))
-        {
-            return new PipeBufferHandler();
-        }
-        else if (type.IsGenericType)
-        {
-            var td = type.GetGenericTypeDefinition();
+        public PipeReportBufferPart GetReport(Object buffer) => GetReportImpl((B)buffer);
 
-            if (td == typeof(BlockingCollection<>))
+        public abstract PipeReportBufferPart GetReportImpl(B buffer);
+
+        public Object MakeBuffer() => MakeBufferImpl();
+
+        public abstract B MakeBufferImpl();
+    }
+
+    public class BlockingCollectionBufferHandler<T> : AbstractBufferHandler<BlockingCollection<T>>
+    {
+        public override PipeReportBufferPart GetReportImpl(BlockingCollection<T> buffer) => buffer.GetReport();
+
+        public override BlockingCollection<T> MakeBufferImpl() => new BlockingCollection<T>(1024);
+    }
+
+    public class PipeBufferHandler : AbstractBufferHandler<Pipe>
+    {
+        public override PipeReportBufferPart GetReportImpl(Pipe buffer) => buffer.GetReport();
+
+        public override Pipe MakeBufferImpl() => new Pipe();
+    }
+
+    public static class BufferHandlers
+    {
+        static ConcurrentDictionary<Type, IBufferHandler> handlers;
+
+        static BufferHandlers()
+        {
+            handlers = new ConcurrentDictionary<Type, IBufferHandler>();
+        }
+
+        public static IBufferHandler GetHandler(Type bufferType)
+            => handlers.GetOrAdd(bufferType, ChooseHandler);
+
+        static IBufferHandler ChooseHandler(Type type)
+        {
+            if (type == typeof(Pipe))
             {
-                var tp = type.GetGenericArguments();
-
-                var handlerType = typeof(BlockingCollectionBufferHandler<>).MakeGenericType(tp);
-
-                return (IBufferHandler)Activator.CreateInstance(handlerType);
+                return new PipeBufferHandler();
             }
+            else if (type.IsGenericType)
+            {
+                var td = type.GetGenericTypeDefinition();
+
+                if (td == typeof(BlockingCollection<>))
+                {
+                    var tp = type.GetGenericArguments();
+
+                    var handlerType = typeof(BlockingCollectionBufferHandler<>).MakeGenericType(tp);
+
+                    return (IBufferHandler)Activator.CreateInstance(handlerType);
+                }
+            }
+
+            throw new Exception($"No known handler for buffer type {type}");
         }
-
-        throw new Exception($"No known handler for buffer type {type}");
-    }
-}
-
-public static class Buffers
-{
-    static PropertyInfo pipeLengthProperty = typeof(Pipe).GetProperty("Length", BindingFlags.NonPublic | BindingFlags.Instance);
-    static PropertyInfo resumeWriterThresholdProperty = typeof(Pipe).GetProperty("ResumeWriterThreshold", BindingFlags.NonPublic | BindingFlags.Instance);
-    static PropertyInfo pauseWriterThresholdProperty = typeof(Pipe).GetProperty("PauseWriterThreshold", BindingFlags.NonPublic | BindingFlags.Instance);
-
-    public static B MakeBuffer<B>()
-    {
-        var bufferType = typeof(B);
-
-        var handler = BufferHandlers.GetHandler(bufferType);
-
-        return (B)handler.MakeBuffer();
     }
 
-    public static PipeReportPart GetAppropriateReport(Object buffer)
+    public static class Buffers
     {
-        var bufferType = buffer.GetType();
+        static PropertyInfo pipeLengthProperty = typeof(Pipe).GetProperty("Length", BindingFlags.NonPublic | BindingFlags.Instance);
+        static PropertyInfo resumeWriterThresholdProperty = typeof(Pipe).GetProperty("ResumeWriterThreshold", BindingFlags.NonPublic | BindingFlags.Instance);
+        static PropertyInfo pauseWriterThresholdProperty = typeof(Pipe).GetProperty("PauseWriterThreshold", BindingFlags.NonPublic | BindingFlags.Instance);
 
-        var handler = BufferHandlers.GetHandler(bufferType);
-
-        return handler.GetReport(buffer);
-    }
-
-    public static PipeReportBufferPart GetReport<T>(this BlockingCollection<T> buffer)
-        => new PipeReportBufferPart(
-            GetBufferState(buffer.Count, buffer.BoundedCapacity >> 2, buffer.BoundedCapacity >> 1),
-            buffer.Count,
-            buffer.BoundedCapacity
-        );
-
-    public static PipeReportBufferPart GetReport(this Pipe buffer)
-    {
-        var count = (Int64)pipeLengthProperty.GetValue(buffer);
-        var resumeThreshold = (Int64)resumeWriterThresholdProperty.GetValue(buffer);
-        var pauseThreshold = (Int64)pauseWriterThresholdProperty.GetValue(buffer);
-
-        return new PipeReportBufferPart(
-            GetBufferState(count, resumeThreshold >> 2, resumeThreshold >> 1),
-            count,
-            pauseThreshold
-        );
-    }
-
-    public static PipeReportBufferState GetBufferState(Int64 count, Int64 lower, Int64 upper)
-    {
-        if (count < lower) return PipeReportBufferState.Empty;
-        if (count > upper) return PipeReportBufferState.Full;
-        return PipeReportBufferState.Mixed;
-    }
-
-    internal static void TransformTo<S, T>(this BlockingCollection<S> buffer, BlockingCollection<T> sink, Func<S, T> map, CancellationToken ct = default)
-    {
-        while (!buffer.IsCompleted)
+        public static B MakeBuffer<B>()
         {
-            var item = buffer.Take(ct);
+            var bufferType = typeof(B);
 
-            sink.Add(map(item), ct);
+            var handler = BufferHandlers.GetHandler(bufferType);
+
+            return (B)handler.MakeBuffer();
         }
 
-        sink.CompleteAdding();
-    }
-
-    internal static async Task TransformToAsync<S, T>(this BlockingCollection<S> buffer, BlockingCollection<T> sink, Func<S, CancellationToken, Task<T>> map, CancellationToken ct = default)
-    {
-        while (!buffer.IsCompleted)
+        public static PipeReportPart GetAppropriateReport(Object buffer)
         {
-            var item = buffer.Take(ct);
+            var bufferType = buffer.GetType();
 
-            var transformed = await map(item, ct);
+            var handler = BufferHandlers.GetHandler(bufferType);
 
-            sink.Add(transformed, ct);
+            return handler.GetReport(buffer);
         }
 
-        sink.CompleteAdding();
+        public static PipeReportBufferPart GetReport<T>(this BlockingCollection<T> buffer)
+            => new PipeReportBufferPart(
+                GetBufferState(buffer.Count, buffer.BoundedCapacity >> 2, buffer.BoundedCapacity >> 1),
+                buffer.Count,
+                buffer.BoundedCapacity
+            );
+
+        public static PipeReportBufferPart GetReport(this Pipe buffer)
+        {
+            var count = (Int64)pipeLengthProperty.GetValue(buffer);
+            var resumeThreshold = (Int64)resumeWriterThresholdProperty.GetValue(buffer);
+            var pauseThreshold = (Int64)pauseWriterThresholdProperty.GetValue(buffer);
+
+            return new PipeReportBufferPart(
+                GetBufferState(count, resumeThreshold >> 2, resumeThreshold >> 1),
+                count,
+                pauseThreshold
+            );
+        }
+
+        public static PipeReportBufferState GetBufferState(Int64 count, Int64 lower, Int64 upper)
+        {
+            if (count < lower) return PipeReportBufferState.Empty;
+            if (count > upper) return PipeReportBufferState.Full;
+            return PipeReportBufferState.Mixed;
+        }
+
+        internal static void TransformTo<S, T>(this BlockingCollection<S> buffer, BlockingCollection<T> sink, Func<S, T> map, CancellationToken ct = default)
+        {
+            while (!buffer.IsCompleted)
+            {
+                var item = buffer.Take(ct);
+
+                sink.Add(map(item), ct);
+            }
+
+            sink.CompleteAdding();
+        }
+
+        internal static async Task TransformToAsync<S, T>(this BlockingCollection<S> buffer, BlockingCollection<T> sink, Func<S, CancellationToken, Task<T>> map, CancellationToken ct = default)
+        {
+            while (!buffer.IsCompleted)
+            {
+                var item = buffer.Take(ct);
+
+                var transformed = await map(item, ct);
+
+                sink.Add(transformed, ct);
+            }
+
+            sink.CompleteAdding();
+        }
     }
-
-
 }

@@ -1,70 +1,77 @@
-﻿namespace Pipelines;
+﻿using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 
-public class SingleThreadTaskScheduler : TaskScheduler
+namespace Pipelines
 {
-    private readonly BlockingCollection<Task> tasks;
-    private readonly Thread thread;
-    private readonly CancellationTokenSource cts;
-    private readonly CancellationToken ct;
-    private readonly Action<String> reportError;
-
-    public SingleThreadTaskScheduler(CancellationToken ct, Action<String> reportError)
+    public class SingleThreadTaskScheduler : TaskScheduler
     {
-        tasks = new BlockingCollection<Task>();
+        private readonly BlockingCollection<Task> tasks;
+        private readonly Thread thread;
+        private readonly CancellationTokenSource cts;
+        private readonly CancellationToken ct;
+        private readonly Action<String> reportError;
 
-        thread = new Thread(Run);
-
-        this.cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        this.ct = cts.Token;
-        this.reportError = reportError;
-
-        thread.Start();
-    }
-
-    public void Join()
-    {
-        cts.Cancel();
-
-        thread.Join();
-    }
-
-    void Run()
-    {
-        try
+        public SingleThreadTaskScheduler(CancellationToken ct, Action<String> reportError)
         {
-            while (!ct.IsCancellationRequested)
-            {
-                if (tasks.TryTake(out var task, -1, ct))
-                {
-                    var success = TryExecuteTask(task);
+            tasks = new BlockingCollection<Task>();
 
-                    if (!success)
+            thread = new Thread(Run);
+
+            this.cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            this.ct = cts.Token;
+            this.reportError = reportError;
+
+            thread.Start();
+        }
+
+        public void Join()
+        {
+            cts.Cancel();
+
+            thread.Join();
+        }
+
+        void Run()
+        {
+            try
+            {
+                while (!ct.IsCancellationRequested)
+                {
+                    if (tasks.TryTake(out var task, -1, ct))
                     {
-                        reportError?.Invoke("Failed to execute task");
+                        var success = TryExecuteTask(task);
+
+                        if (!success)
+                        {
+                            reportError?.Invoke("Failed to execute task");
+                        }
                     }
                 }
             }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                reportError($"Thread aborted with exception: " + ex.Message);
+            }
         }
-        catch (OperationCanceledException)
+
+        protected override IEnumerable<Task> GetScheduledTasks() => throw new NotImplementedException();
+
+        protected override void QueueTask(Task task) => tasks.Add(task);
+
+        protected override Boolean TryExecuteTaskInline(Task task, Boolean taskWasPreviouslyQueued)
         {
-            return;
+            reportError?.Invoke("Refused to inline a previously queued task");
+
+            if (taskWasPreviouslyQueued) return false;
+
+            return base.TryExecuteTask(task);
         }
-        catch (Exception ex)
-        {
-            reportError($"Thread aborted with exception: " + ex.Message);
-        }
-    }
-
-    protected override IEnumerable<Task> GetScheduledTasks() => throw new NotImplementedException();
-
-    protected override void QueueTask(Task task) => tasks.Add(task);
-
-    protected override Boolean TryExecuteTaskInline(Task task, Boolean taskWasPreviouslyQueued)
-    {
-        reportError?.Invoke("Refused to inline a previously queued task");
-
-        if (taskWasPreviouslyQueued) return false;
-
-        return base.TryExecuteTask(task);
     }
 }
