@@ -42,7 +42,7 @@ var alreadyWritten = targetConnection.QuerySingle<Int64?>("select count(*) from 
 
 var maxId = targetConnection.QuerySingle<Int64?>("select max(id) from testcases_archive") ?? 0;
 
-Console.WriteLine($"Copying from id {maxId:n}");
+Console.WriteLine($"Copying from id {maxId:n0}");
 
 var rowsWritten = 0;
 
@@ -50,7 +50,7 @@ var totalCount = sourceConnection.QuerySingle<Int64>("select count(*) from testc
 
 while (true)
 {
-    var readingCommandSql = $"select {columnsSql} from testcases_archive where id > {maxId} limit {batchSize};";
+    var readingCommandSql = $"select {columnsSql} from testcases_archive where id > {maxId} order id asc limit {batchSize};";
 
     using var readingCommand = new MySqlCommand(readingCommandSql, sourceConnection);
 
@@ -69,11 +69,11 @@ while (true)
 
     rowsWritten += sqlBulkCopy.RowsCopied;
 
-    var percentage = 1.0 + (rowsWritten + alreadyWritten) / totalCount;
+    var percentage = 1.0 * (rowsWritten + alreadyWritten) / totalCount;
 
     maxId = targetConnection.QuerySingle<Int64>("select max(id) from testcases_archive");
 
-    Console.WriteLine($"{rowsWritten:n} rows written, latest id is {maxId:n} ({percentage:p})");
+    Console.WriteLine($"{rowsWritten:n0} rows written, latest id is {maxId:n0} ({percentage:p})");
 }
 
 Console.WriteLine("done");
