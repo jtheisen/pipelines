@@ -23,6 +23,9 @@ Console.WriteLine($"Let's go with: {settings.TargetDbConnectionString} and {sett
 var sourceConnection = new MySqlConnection(settings.TestflowDbConnectionString);
 sourceConnection.Open();
 
+using var targetConnection = new SqlConnection(settings.TargetDbConnectionString);
+targetConnection.Open();
+
 var columns = new[] {
     "id",
     "company", "location", "event", "product", "testuser", "offer_id", "invoice_id", "laboratory_id",
@@ -31,23 +34,40 @@ var columns = new[] {
     "result"
 };
 
+var batchSize = 10000;
+
 var columnsSql = String.Join(", ", columns);
 
-var readingCommandSql = $"select {columnsSql} from testcases_archive where id > 0 limit 10;";
+var maxId = targetConnection.QuerySingle<Int64?>("select max(id) from testcases_archive") ?? 0;
 
-//var batch = sourceConnection.Query(readingCommand);
+Console.WriteLine($"Copying from id {maxId}");
 
-var readingCommand = new MySqlCommand(readingCommandSql, sourceConnection);
+var rowsWritten = 0;
 
-var reader = readingCommand.ExecuteReader();
+while (true)
+{
+    var readingCommandSql = $"select {columnsSql} from testcases_archive where id > 0 limit {batchSize};";
 
-using var targetConnection = new SqlConnection(settings.TargetDbConnectionString);
-targetConnection.Open();
-using var sqlBulkCopy = new SqlBulkCopy(targetConnection);
-sqlBulkCopy.DestinationTableName = "testcases_archive";
-sqlBulkCopy.WriteToServer(reader);
+    var readingCommand = new MySqlCommand(readingCommandSql, sourceConnection);
 
-//targetConnection.Execute($"inset into testcases_archive ({columnsSql}) values ()");
+    var reader = readingCommand.ExecuteReader();
 
+    using var sqlBulkCopy = new SqlBulkCopy(targetConnection);
+    sqlBulkCopy.DestinationTableName = "testcases_archive";
+    sqlBulkCopy.WriteToServer(reader);
+
+    if (sqlBulkCopy.RowsCopied == 0)
+    {
+        Console.WriteLine("Stopping after no more rows were copied");
+        
+        break;
+    }
+
+    rowsWritten += sqlBulkCopy.RowsCopied;
+
+    maxId = targetConnection.QuerySingle<Int64>("select max(id) from testcases_archive");
+
+    Console.WriteLine($"{sqlBulkCopy.RowsCopied} rows written, latest id is {maxId}");
+}
 
 Console.WriteLine("done");
