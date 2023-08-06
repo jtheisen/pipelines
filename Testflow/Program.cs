@@ -22,6 +22,6 @@ Console.WriteLine($"Let's go with: {settings.TargetDbConnectionString} and {sett
 
 var connection = new MySqlConnection(settings.TestflowDbConnectionString);
 
-var result = connection.QuerySingle("select count(*) from testcase;");
+var result = connection.QuerySingle("select count(*) from testcases_archive;");
 
 Console.WriteLine("Result from Mysql: " + result);
