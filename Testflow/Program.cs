@@ -38,11 +38,15 @@ var batchSize = 10000;
 
 var columnsSql = String.Join(", ", columns);
 
+var alreadyWritten = targetConnection.QuerySingle<Int64?>("select count(*) from testcases_archive") ?? 0;
+
 var maxId = targetConnection.QuerySingle<Int64?>("select max(id) from testcases_archive") ?? 0;
 
-Console.WriteLine($"Copying from id {maxId}");
+Console.WriteLine($"Copying from id {maxId:n}");
 
 var rowsWritten = 0;
+
+var totalCount = sourceConnection.QuerySingle("select count(*) from testcases_archive");
 
 while (true)
 {
@@ -65,9 +69,11 @@ while (true)
 
     rowsWritten += sqlBulkCopy.RowsCopied;
 
+    var percentage = 1.0 + (rowsWritten + alreadyWritten) / totalCount;
+
     maxId = targetConnection.QuerySingle<Int64>("select max(id) from testcases_archive");
 
-    Console.WriteLine($"{sqlBulkCopy.RowsCopied} rows written, latest id is {maxId}");
+    Console.WriteLine($"{rowsWritten:n} rows written, latest id is {maxId:n} ({percentage:p})");
 }
 
 Console.WriteLine("done");
