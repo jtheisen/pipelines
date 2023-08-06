@@ -48,7 +48,7 @@ while (true)
 {
     var readingCommandSql = $"select {columnsSql} from testcases_archive where id > 0 limit {batchSize};";
 
-    var readingCommand = new MySqlCommand(readingCommandSql, sourceConnection);
+    using var readingCommand = new MySqlCommand(readingCommandSql, sourceConnection);
 
     var reader = readingCommand.ExecuteReader();
 
