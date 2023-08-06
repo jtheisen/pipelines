@@ -16,13 +16,9 @@ var settings = new AppSettings();
 
 configuration.Bind(settings);
 
-Console.WriteLine($"Let's go with: {settings.StorageConnectionString} and {settings.StorageConnectionString}");
+Console.WriteLine($"Let's go with: {settings.TargetDbConnectionString} and {settings.TestflowDbConnectionString}");
 
-var blobClient = new BlobClient(settings.StorageConnectionString, "testflow_main_db", "testcase");
 
-blobClient.Upload(new MemoryStream(Encoding.UTF8.GetBytes("Hello, World!")));
-
-Console.WriteLine("Blob written");
 
 var connection = new MySqlConnection(settings.TestflowDbConnectionString);
 

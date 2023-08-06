@@ -8,7 +8,7 @@ namespace Testflow
 {
     public class AppSettings
     {
-        public String StorageConnectionString { get; set; }
+        public String TargetDbConnectionString { get; set; }
 
         public String TestflowDbConnectionString { get; set; }
     }
