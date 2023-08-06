@@ -46,7 +46,7 @@ var rowsWritten = 0;
 
 while (true)
 {
-    var readingCommandSql = $"select {columnsSql} from testcases_archive where id > 0 limit {batchSize};";
+    var readingCommandSql = $"select {columnsSql} from testcases_archive where id > {maxId} limit {batchSize};";
 
     using var readingCommand = new MySqlCommand(readingCommandSql, sourceConnection);
 
