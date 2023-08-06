@@ -50,7 +50,7 @@ var totalCount = sourceConnection.QuerySingle<Int64>("select count(*) from testc
 
 while (true)
 {
-    var readingCommandSql = $"select {columnsSql} from testcases_archive where id > {maxId} order id asc limit {batchSize};";
+    var readingCommandSql = $"select {columnsSql} from testcases_archive where id > {maxId} order by id asc limit {batchSize};";
 
     using var readingCommand = new MySqlCommand(readingCommandSql, sourceConnection);
 
