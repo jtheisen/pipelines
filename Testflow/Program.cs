@@ -46,7 +46,7 @@ Console.WriteLine($"Copying from id {maxId:n}");
 
 var rowsWritten = 0;
 
-var totalCount = sourceConnection.QuerySingle("select count(*) from testcases_archive");
+var totalCount = sourceConnection.QuerySingle<Int64>("select count(*) from testcases_archive");
 
 while (true)
 {
