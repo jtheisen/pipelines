@@ -50,7 +50,7 @@ while (true)
 
     using var readingCommand = new MySqlCommand(readingCommandSql, sourceConnection);
 
-    var reader = readingCommand.ExecuteReader();
+    using var reader = readingCommand.ExecuteReader();
 
     using var sqlBulkCopy = new SqlBulkCopy(targetConnection);
     sqlBulkCopy.DestinationTableName = "testcases_archive";
