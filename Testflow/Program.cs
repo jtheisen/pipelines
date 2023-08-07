@@ -26,7 +26,7 @@ var columns = new[] {
     "timeslot", "timeslot_end", "checkin_at", "test_date", "result_date", "consent_at",
     "status", "created_at", "updated_at",
     "result",
-    "case when email = '' then null else MD5(email) end as email_md5"
+    "case when email like '%@%' then MD5(email) else null end as email_md5"
 };
 
 var sourceFilter = "result is not null and result <> ''";
