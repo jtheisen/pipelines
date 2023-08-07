@@ -26,7 +26,7 @@ var columns = new[] {
     "timeslot", "timeslot_end", "checkin_at", "test_date", "result_date", "consent_at",
     "status", "created_at", "updated_at",
     "result",
-    "MD5(email) as emailMd5"
+    "MD5(email) as email_md5"
 };
 
 var sourceFilter = "result is not null and result <> ''";
