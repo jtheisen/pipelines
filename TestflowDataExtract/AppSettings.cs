@@ -8,12 +8,6 @@ namespace Testflow
 {
     public class AppSettings
     {
-        public String ArchiveDbConnectionString { get; set; }
-        public String ArchiveTable { get; set; }
-
-        public String LatestDbConnectionString { get; set; }
-        public String LatestTable { get; set; }
-
         public String TargetDbConnectionString { get; set; }
         public String TargetTable { get; set; }
     }

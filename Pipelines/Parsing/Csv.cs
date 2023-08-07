@@ -34,10 +34,10 @@ namespace Pipelines.CsvHelper
 
     public static partial class CsvExtensions
     {
-        public static IEnumerablePipeEnd<T> Csv<T>(IStreamPipeEnd sourcePipeEnd, CultureInfo cultureInfo)
+        public static IEnumerablePipeEnd<T> Csv<T>(this IStreamPipeEnd sourcePipeEnd, CultureInfo cultureInfo)
             => sourcePipeEnd.Itemize<T, CsvConfiguration>(nameof(Csv), new CsvConfiguration(cultureInfo), ParseCsv, SerializeCsv);
 
-        public static IEnumerablePipeEnd<T> Csv<T>(IStreamPipeEnd sourcePipeEnd, CsvConfiguration config)
+        public static IEnumerablePipeEnd<T> Csv<T>(this IStreamPipeEnd sourcePipeEnd, CsvConfiguration config)
             => sourcePipeEnd.Itemize<T, CsvConfiguration>(nameof(Csv), config, ParseCsv, SerializeCsv);
 
         static void ParseCsv<T>(TextReader reader, Action<T> sink, CsvConfiguration config)
