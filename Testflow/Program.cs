@@ -38,26 +38,26 @@ var batchSize = 10000;
 
 var columnsSql = String.Join(", ", columns);
 
-var alreadyWritten = targetConnection.QuerySingle<Int64?>("select count(*) from testcases_archive") ?? 0;
+var alreadyWritten = targetConnection.QuerySingle<Int64?>($"select count(*) from {settings.TargetTable}") ?? 0;
 
-var maxId = targetConnection.QuerySingle<Int64?>("select max(id) from testcases_archive") ?? 0;
+var maxId = targetConnection.QuerySingle<Int64?>($"select max(id) from {settings.TargetTable}") ?? 0;
 
 Console.WriteLine($"Copying from id {maxId:n0}");
 
 var rowsWritten = 0;
 
-var totalCount = sourceConnection.QuerySingle<Int64>("select count(*) from testcases_archive");
+var totalCount = sourceConnection.QuerySingle<Int64>($"select count(*) from {settings.SourceTable}");
 
 while (true)
 {
-    var readingCommandSql = $"select {columnsSql} from testcases_archive where id > {maxId} order by id asc limit {batchSize};";
+    var readingCommandSql = $"select {columnsSql} from {settings.SourceTable} where id > {maxId} order by id asc limit {batchSize};";
 
     using var readingCommand = new MySqlCommand(readingCommandSql, sourceConnection);
 
     using var reader = readingCommand.ExecuteReader();
 
     using var sqlBulkCopy = new SqlBulkCopy(targetConnection);
-    sqlBulkCopy.DestinationTableName = "testcases_archive";
+    sqlBulkCopy.DestinationTableName = settings.TargetTable;
     sqlBulkCopy.WriteToServer(reader);
 
     if (sqlBulkCopy.RowsCopied == 0)
@@ -71,7 +71,7 @@ while (true)
 
     var percentage = 1.0 * (rowsWritten + alreadyWritten) / totalCount;
 
-    maxId = targetConnection.QuerySingle<Int64>("select max(id) from testcases_archive");
+    maxId = targetConnection.QuerySingle<Int64>($"select max(id) from {settings.TargetTable}");
 
     Console.WriteLine($"{rowsWritten:n0} rows written, latest id is {maxId:n0} ({percentage:p})");
 }

@@ -9,7 +9,9 @@ namespace Testflow
     public class AppSettings
     {
         public String TargetDbConnectionString { get; set; }
+        public String TargetTable { get; set; }
 
         public String TestflowDbConnectionString { get; set; }
+        public String SourceTable { get; set; }
     }
 }
