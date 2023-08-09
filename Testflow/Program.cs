@@ -61,10 +61,6 @@ void Copy(String sourceConnectionString, String sourceTable, String targetTable)
 
     Console.WriteLine("Connected, querying target");
 
-    var alreadyWritten = targetConnection.QuerySingle<Int64?>($"select count(*) from {targetTable}") ?? 0;
-
-    Console.WriteLine("1 worked");
-
     var maxId = targetConnection.QuerySingle<Int64?>($"select max(id) from {targetTable}") ?? 0;
 
     Console.WriteLine("2 worked");
@@ -94,11 +90,9 @@ void Copy(String sourceConnectionString, String sourceTable, String targetTable)
 
         rowsWritten += sqlBulkCopy.RowsCopied;
 
-        var percentage = 1.0 * (rowsWritten + alreadyWritten) / totalCount;
-
         maxId = targetConnection.QuerySingle<Int64>($"select max(id) from {settings.TargetTable}");
 
-        Console.WriteLine($"{rowsWritten:n0} rows written, latest id is {maxId:n0} ({percentage:p})");
+        Console.WriteLine($"{rowsWritten:n0} rows written, latest id is {maxId:n0}");
     }
 }
 
