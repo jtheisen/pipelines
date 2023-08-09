@@ -23,7 +23,7 @@ var options = new SqlRetryLogicOption()
     // Preferred gap time to delay before retry
     DeltaTime = TimeSpan.FromSeconds(1),
     // Maximum gap time for each delay time before retry
-    MaxTimeInterval = TimeSpan.FromSeconds(10)
+    MaxTimeInterval = TimeSpan.FromSeconds(35)
 };
 
 Console.WriteLine("Connecting to target...");
@@ -62,8 +62,6 @@ void Copy(String sourceConnectionString, String sourceTable, String targetTable)
     Console.WriteLine("Connected, querying target");
 
     var maxId = targetConnection.QuerySingle<Int64?>($"select max(id) from {targetTable}") ?? 0;
-
-    Console.WriteLine("2 worked");
 
     Console.WriteLine($"Copying starting after id {maxId:n0}, from {sourceTable} to {targetTable}");
 
