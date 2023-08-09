@@ -16,9 +16,19 @@ var settings = new AppSettings();
 
 configuration.Bind(settings);
 
+var options = new SqlRetryLogicOption()
+{
+    // Tries 5 times before throwing an exception
+    NumberOfTries = 3,
+    // Preferred gap time to delay before retry
+    DeltaTime = TimeSpan.FromSeconds(1),
+    // Maximum gap time for each delay time before retry
+    MaxTimeInterval = TimeSpan.FromSeconds(10)
+};
 
 using var targetConnection = new SqlConnection(settings.TargetDbConnectionString);
 targetConnection.Open();
+targetConnection.RetryLogicProvider = SqlConfigurableRetryFactory.CreateExponentialRetryProvider(options);
 
 var columns = new[] {
     "id",
@@ -35,6 +45,9 @@ var batchSize = 10000;
 
 var columnsSql = String.Join(", ", columns);
 
+var rowsWritten = 0L;
+var totalCount = 0L;
+
 void Copy(String sourceConnectionString, String sourceTable, String targetTable)
 {
     using var sourceConnection = new MySqlConnection(sourceConnectionString);
@@ -46,9 +59,7 @@ void Copy(String sourceConnectionString, String sourceTable, String targetTable)
 
     Console.WriteLine($"Copying starting after id {maxId:n0}, from {sourceTable} to {targetTable}");
 
-    var rowsWritten = 0;
-
-    var totalCount = sourceConnection.QuerySingle<Int64>($"select count(*) from {sourceTable} where {sourceFilter}");
+    totalCount += sourceConnection.QuerySingle<Int64>($"select count(*) from {sourceTable} where {sourceFilter}");
 
     while (true)
     {
