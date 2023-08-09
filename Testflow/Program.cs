@@ -26,9 +26,13 @@ var options = new SqlRetryLogicOption()
     MaxTimeInterval = TimeSpan.FromSeconds(10)
 };
 
+Console.WriteLine("Connecting to target...");
+
 using var targetConnection = new SqlConnection(settings.TargetDbConnectionString);
 targetConnection.Open();
 targetConnection.RetryLogicProvider = SqlConfigurableRetryFactory.CreateExponentialRetryProvider(options);
+
+Console.WriteLine("Connected.");
 
 var columns = new[] {
     "id",
