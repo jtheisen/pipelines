@@ -54,12 +54,20 @@ var totalCount = 0L;
 
 void Copy(String sourceConnectionString, String sourceTable, String targetTable)
 {
+    Console.WriteLine("Opening source: " + sourceConnectionString);
+
     using var sourceConnection = new MySqlConnection(sourceConnectionString);
     sourceConnection.Open();
 
+    Console.WriteLine("Connected, querying target");
+
     var alreadyWritten = targetConnection.QuerySingle<Int64?>($"select count(*) from {targetTable}") ?? 0;
 
+    Console.WriteLine("1 worked");
+
     var maxId = targetConnection.QuerySingle<Int64?>($"select max(id) from {targetTable}") ?? 0;
+
+    Console.WriteLine("2 worked");
 
     Console.WriteLine($"Copying starting after id {maxId:n0}, from {sourceTable} to {targetTable}");
 
