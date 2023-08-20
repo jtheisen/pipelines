@@ -5,6 +5,9 @@ GO
 SET QUOTED_IDENTIFIER ON
 GO
 
+DROP TABLE [testcases_new];
+go
+
 CREATE TABLE [dbo].[testcases_new](
 	[id] [bigint] NOT NULL,
 	[company] [bigint] NULL,
@@ -25,7 +28,9 @@ CREATE TABLE [dbo].[testcases_new](
 	[created_at] [datetime2](7) NULL,
 	[updated_at] [datetime2](7) NULL,
 	[result] [varchar](50) NULL,
-	[email_md5] [varchar](32) NULL
+	[email_md5] [varchar](32) NULL,
+	[postal] [varchar](20) NULL,
+	[country] [varchar](2) NULL,
 ) ON [PRIMARY]
 GO
 
@@ -33,6 +38,7 @@ GO
 
 create unique clustered index IX_Id on testcases_new (id) with (data_compression = page);
 
-truncate table testcases_new
+--truncate table testcases_new
 
-select count(*), max(id) from testcases_new
+select max(id) from testcases_new
+
