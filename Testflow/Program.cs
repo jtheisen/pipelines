@@ -76,12 +76,12 @@ void Copy(String sourceConnectionString, String sourceTable, String targetTable)
 
         using var reader = readingCommand.ExecuteReader();
 
-        reader.Read();
-        for (var i = 0; i < reader.FieldCount; ++i)
-        {
-            Console.WriteLine($"{i}: {reader.GetFieldType(i).Name} {reader.GetDataTypeName(i)}");
-        }
-        throw new Exception("aborting");
+        //reader.Read();
+        //for (var i = 0; i < reader.FieldCount; ++i)
+        //{
+        //    Console.WriteLine($"{i}: {reader.GetFieldType(i).Name} {reader.GetDataTypeName(i)}");
+        //}
+        //throw new Exception("aborting");
 
         using var sqlBulkCopy = new SqlBulkCopy(targetConnection);
         sqlBulkCopy.DestinationTableName = settings.TargetTable;
