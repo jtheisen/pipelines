@@ -38,7 +38,7 @@ var columns = new[] {
     "id",
     "company", "location", "event", "product", "testuser", "offer_id", "invoice_id", "laboratory_id",
     "timeslot", "timeslot_end", "checkin_at", "test_date", "result_date", "consent_at",
-    "postal", "country",
+    "'' postal", "'' country",
     "status", "created_at", "updated_at",
     "result",
     "case when email like '%@%' then MD5(email) else null end as email_md5"
